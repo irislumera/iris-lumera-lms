@@ -5,7 +5,10 @@ import { commitRegistration, getRegistration, inspectManifest, persistScormPacka
 import { learningReport } from './reporting.js';
 import { sendWelcomeEmail, sendCourseAssignedEmail, sendCourseCompletedEmail } from './email.js';
 
-const MAX_ASSET_BYTES=25*1024*1024;
+const MAX_ASSET_BYTES=500*1024*1024;
+const KV_VALUE_BYTES=25*1024*1024;
+const UPLOAD_CHUNK_BYTES=20*1024*1024;
+const MAX_ASSET_CHUNKS=Math.ceil(MAX_ASSET_BYTES/UPLOAD_CHUNK_BYTES);
 const FALLBACK_MIME={
   '.pdf':'application/pdf','.mp4':'video/mp4','.webm':'video/webm','.mp3':'audio/mpeg','.wav':'audio/wav','.ogg':'audio/ogg',
   '.ppt':'application/vnd.ms-powerpoint','.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -176,10 +179,97 @@ async function enrollAdmin(env,request,id=null){
 async function enrollmentStatus(env,request,id){const s=await authCsrf(env,request,'admin');const b=await bodyJson(request);const status=['active','revoked','completed'].includes(b.status)?b.status:'revoked';await env.DB.prepare('UPDATE enrollments SET status=?,completed_at=CASE WHEN ?=\'completed\' THEN COALESCE(completed_at,?) ELSE completed_at END WHERE id=?').bind(status,status,now(),id).run();await audit(env,s.id,`enrollment.${status}`,'enrollment',id,{});return json({ok:true,status});}
 async function enrollments(env,request){await authCsrf(env,request,'admin');const q=new URL(request.url).searchParams.get('q')?.trim()||'';const p=`%${q}%`;const rows=await env.DB.prepare(`SELECT e.*,u.email,u.first_name,u.last_name,u.employee_id,c.title course_title FROM enrollments e JOIN users u ON u.id=e.user_id JOIN courses c ON c.id=e.course_id WHERE u.email LIKE ? OR u.first_name LIKE ? OR u.last_name LIKE ? OR c.title LIKE ? ORDER BY e.enrolled_at DESC LIMIT 500`).bind(p,p,p,p).all();return json({enrollments:rows.results||[]});}
 
-async function assets(env,request){const s=await authCsrf(env,request,'admin');if(request.method==='GET'){const courseId=new URL(request.url).searchParams.get('courseId');const rows=courseId?await env.DB.prepare('SELECT * FROM assets WHERE course_id=? OR course_id IS NULL ORDER BY created_at DESC LIMIT 500').bind(courseId).all():await env.DB.prepare('SELECT * FROM assets ORDER BY created_at DESC LIMIT 500').all();return json({assets:rows.results||[]});}
-  const url=new URL(request.url),filename=cleanName(url.searchParams.get('filename')||'upload.bin'),courseId=url.searchParams.get('courseId')||null,kind=url.searchParams.get('kind')||'general';const size=Number(request.headers.get('Content-Length')||0);if(size>MAX_ASSET_BYTES)return json({error:'File exceeds the 25 MiB free content-storage limit'},413);if(!request.body)return json({error:'Upload body is empty'},400);const id=randomId(),key=`uploads/${new Date().toISOString().slice(0,10)}/${id}-${filename}`,mime=mimeFor(filename,request.headers.get('Content-Type')||'');await env.CONTENT.put(key,request.body,{metadata:{contentType:mime}});await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,courseId,key,filename,mime,size,kind,s.id,now()).run();await audit(env,s.id,'asset.uploaded','asset',id,{filename,kind,size,courseId});return json({ok:true,asset:{id,courseId,filename,mimeType:mime,sizeBytes:size,kind}},201);
+async function assets(env,request){
+  const s=await authCsrf(env,request,'admin');
+  const url=new URL(request.url);
+  const path=route(url.pathname).slice(0);
+  if(request.method==='GET'){
+    const courseId=url.searchParams.get('courseId');
+    const rows=courseId?await env.DB.prepare('SELECT * FROM assets WHERE course_id=? OR course_id IS NULL ORDER BY created_at DESC LIMIT 500').bind(courseId).all():await env.DB.prepare('SELECT * FROM assets ORDER BY created_at DESC LIMIT 500').all();
+    return json({assets:rows.results||[]});
+  }
+  if(request.method==='POST'){
+    const filename=cleanName(url.searchParams.get('filename')||'upload.bin');
+    const courseId=url.searchParams.get('courseId')||null;
+    const kind=url.searchParams.get('kind')||'general';
+    const size=Number(request.headers.get('Content-Length')||0);
+    if(size<=0)return json({error:'File size could not be determined'},400);
+    if(size>MAX_ASSET_BYTES)return json({error:'File exceeds the 500 MB content limit'},413);
+    if(size>KV_VALUE_BYTES)return json({error:'Files above 25 MiB must use the chunked upload flow'},413);
+    if(!request.body)return json({error:'Upload body is empty'},400);
+    const id=randomId(),key=\`uploads/\${new Date().toISOString().slice(0,10)}/\${id}-\${filename}\`,mime=mimeFor(filename,request.headers.get('Content-Type')||'');
+    await env.CONTENT.put(key,request.body,{metadata:{contentType:mime}});
+    await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,courseId,key,filename,mime,size,kind,s.id,now()).run();
+    await audit(env,s.id,'asset.uploaded','asset',id,{filename,kind,size,courseId,storage:'kv'});
+    return json({ok:true,asset:{id,courseId,filename,mimeType:mime,sizeBytes:size,kind}},201);
+  }
+  return json({error:'Method not allowed'},405);
 }
-async function deleteAsset(env,request,id){const s=await authCsrf(env,request,'admin');const asset=await env.DB.prepare('SELECT * FROM assets WHERE id=?').bind(id).first();if(!asset)return json({error:'Asset not found'},404);await env.CONTENT.delete(asset.storage_key);await env.DB.prepare('DELETE FROM assets WHERE id=?').bind(id).run();await audit(env,s.id,'asset.deleted','asset',id,{filename:asset.filename});return json({ok:true});}
+async function assetUploadStart(env,request){
+  const s=await authCsrf(env,request,'admin');
+  const b=await bodyJson(request);
+  const filename=cleanName(String(b.filename||'upload.bin'));
+  const courseId=String(b.courseId||'').trim()||null;
+  const kind=String(b.kind||'general').trim()||'general';
+  const size=Number(b.size||0);
+  const mime=mimeFor(filename,String(b.mimeType||''));
+  if(!Number.isFinite(size)||size<=KV_VALUE_BYTES||size>MAX_ASSET_BYTES)return json({error:'Chunked uploads must be larger than 25 MiB and no larger than 500 MB'},413);
+  const totalChunks=Math.ceil(size/UPLOAD_CHUNK_BYTES);
+  if(totalChunks>MAX_ASSET_CHUNKS)return json({error:'File has too many chunks'},413);
+  const uploadId=randomId(20);
+  const manifest={
+    uploadId,createdBy:s.id,filename,courseId,kind,size,mime,totalChunks,createdAt:now()
+  };
+  await env.CONTENT.put(\`uploads/meta/\${uploadId}\`,JSON.stringify(manifest),{metadata:{contentType:'application/json'}});
+  return json({ok:true,uploadId,totalChunks,chunkSize:UPLOAD_CHUNK_BYTES});
+}
+async function assetUploadChunk(env,request){
+  const s=await authCsrf(env,request,'admin');
+  const url=new URL(request.url);
+  const uploadId=String(url.searchParams.get('uploadId')||'').trim();
+  const index=Number(url.searchParams.get('index'));
+  if(!uploadId||!Number.isInteger(index))return json({error:'Upload ID and chunk index are required'},400);
+  const meta=await env.CONTENT.get(\`uploads/meta/\${uploadId}\`,{type:'json'});
+  if(!meta||meta.createdBy!==s.id)return json({error:'Upload not found'},404);
+  if(index<0||index>=meta.totalChunks)return json({error:'Invalid chunk index'},400);
+  const size=Number(request.headers.get('Content-Length')||0);
+  if(size<=0||size>UPLOAD_CHUNK_BYTES)return json({error:'Invalid chunk size'},413);
+  if(!request.body)return json({error:'Chunk body is empty'},400);
+  await env.CONTENT.put(\`uploads/chunks/\${uploadId}/\${index}\`,request.body,{metadata:{contentType:meta.mime}});
+  return json({ok:true,index});
+}
+async function assetUploadFinalize(env,request){
+  const s=await authCsrf(env,request,'admin');
+  const b=await bodyJson(request);
+  const uploadId=String(b.uploadId||'').trim();
+  const meta=await env.CONTENT.get(\`uploads/meta/\${uploadId}\`,{type:'json'});
+  if(!meta||meta.createdBy!==s.id)return json({error:'Upload not found'},404);
+  for(let i=0;i<meta.totalChunks;i++){
+    const exists=await env.CONTENT.get(\`uploads/chunks/\${uploadId}/\${i}\`,{type:'arrayBuffer'});
+    if(!exists?.value)return json({error:\`Upload is incomplete. Missing chunk \${i+1} of \${meta.totalChunks}.\`},409);
+  }
+  const id=randomId(),key=\`uploads/chunked/\${uploadId}\`;
+  await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,meta.courseId,key,meta.filename,meta.mime,meta.size,meta.kind,s.id,now()).run();
+  await env.CONTENT.delete(\`uploads/meta/\${uploadId}\`);
+  await audit(env,s.id,'asset.uploaded','asset',id,{filename:meta.filename,kind:meta.kind,size:meta.size,courseId:meta.courseId,storage:'kv-chunked',chunks:meta.totalChunks});
+  return json({ok:true,asset:{id,courseId:meta.courseId,filename:meta.filename,mimeType:meta.mime,sizeBytes:meta.size,kind:meta.kind}},201);
+}
+async function deleteAsset(env,request,id){
+  const s=await authCsrf(env,request,'admin');
+  const asset=await env.DB.prepare('SELECT * FROM assets WHERE id=?').bind(id).first();
+  if(!asset)return json({error:'Asset not found'},404);
+  if(String(asset.storage_key||'').startsWith('uploads/chunked/')){
+    const uploadId=String(asset.storage_key).replace('uploads/chunked/','');
+    const total=Math.ceil(Number(asset.size_bytes||0)/UPLOAD_CHUNK_BYTES);
+    for(let i=0;i<total;i++)await env.CONTENT.delete(\`uploads/chunks/\${uploadId}/\${i}\`);
+    await env.CONTENT.delete(\`uploads/meta/\${uploadId}\`);
+  }else{
+    await env.CONTENT.delete(asset.storage_key);
+  }
+  await env.DB.prepare('DELETE FROM assets WHERE id=?').bind(id).run();
+  await audit(env,s.id,'asset.deleted','asset',id,{filename:asset.filename});
+  return json({ok:true});
+}
 async function scormUpload(env,request){const s=await authCsrf(env,request,'admin');const url=new URL(request.url);const courseId=url.searchParams.get('courseId')||null,moduleId=url.searchParams.get('moduleId')||null,filename=cleanName(url.searchParams.get('filename')||'package.zip');const limit=Math.min(Number(env.SCORM_MAX_BYTES||26214400),25*1024*1024);const size=Number(request.headers.get('Content-Length')||0);if(size<=0||size>limit)return json({error:`SCORM package must be between 1 byte and ${Math.round(limit/1048576)} MB in this free release`},413);const bytes=await request.arrayBuffer();const inspected=await inspectManifest(bytes);const pkg=await persistScormPackage(env,s.id,courseId,filename,bytes,inspected);let targetModule=moduleId&&await env.DB.prepare('SELECT id FROM modules WHERE id=? AND course_id=?').bind(moduleId,courseId).first();if(!targetModule){const m=randomId();const position=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM modules WHERE course_id=?').bind(courseId).first())?.p||1);await env.DB.prepare('INSERT INTO modules(id,course_id,title,description,position,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(m,courseId,'Interactive Modules','SCORM learning packages',position,40,now(),now()).run();targetModule={id:m};}
   const lessonId=randomId();const lp=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM lessons WHERE module_id=?').bind(targetModule.id).first())?.p||1);await env.DB.prepare(`INSERT INTO lessons(id,module_id,title,type,body,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(lessonId,targetModule.id,inspected.title,'scorm','',pkg.id,Number(url.searchParams.get('duration')||15),lp,1,50,now(),now()).run();await audit(env,s.id,'scorm.imported','scorm_package',pkg.id,{courseId,moduleId:targetModule.id,lessonId,version:inspected.version});return json({ok:true,package:{id:pkg.id,title:pkg.title,version:pkg.version,launchPath:pkg.launchPath,courseId,moduleId:targetModule.id,lessonId}},201);
 }
@@ -238,7 +328,65 @@ async function profile(env,request){const s=await authCsrf(env,request);const b=
 async function changePassword(env,request){const s=await authCsrf(env,request);const b=await bodyJson(request),next=String(b.newPassword||''),current=String(b.currentPassword||'');if(next.length<10)return json({error:'New password must be at least 10 characters'},400);const user=await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(s.id).first();const old=await derivePassword(current,user.password_salt);if(old.hash!==user.password_hash)return json({error:'Current password is incorrect'},400);const pass=await derivePassword(next);await env.DB.prepare('UPDATE users SET password_hash=?,password_salt=?,must_change_password=0,updated_at=? WHERE id=?').bind(pass.hash,pass.salt,now(),s.id).run();return json({ok:true});}
 async function learnerCertificates(env,request){const s=await requireUser(env,request);const rows=await env.DB.prepare(`SELECT ce.*,c.slug,c.title course_title,ct.config_json,ct.background_asset_id FROM certificates ce JOIN courses c ON c.id=ce.course_id LEFT JOIN certificate_templates ct ON ct.id=ce.template_id WHERE ce.user_id=? ORDER BY ce.issued_at DESC`).bind(s.id).all();return json({certificates:rows.results||[]});}
 async function certificatePage(env,request,id){const s=await requireUser(env,request);const cert=await env.DB.prepare('SELECT * FROM certificates WHERE id=?').bind(id).first();if(!cert)return new Response('Not found',{status:404});if(s.role!=='admin'&&cert.user_id!==s.id)return new Response('Forbidden',{status:403});const template=cert.template_id?await env.DB.prepare('SELECT * FROM certificate_templates WHERE id=?').bind(cert.template_id).first():null;const bg=template?.background_asset_id?`/api/assets/${template.background_asset_id}`:'';return new Response(renderCertificateHtml(cert,template,bg),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
-async function serveAsset(env,request,id){await requireUser(env,request);const asset=await env.DB.prepare('SELECT * FROM assets WHERE id=?').bind(id).first();if(!asset)return new Response('Not found',{status:404});const obj=await env.CONTENT.getWithMetadata(asset.storage_key,{type:'stream'});if(!obj?.value)return new Response('Not found',{status:404});const headers=new Headers();headers.set('Content-Type',asset.mime_type||obj.metadata?.contentType||'application/octet-stream');headers.set('Cache-Control','private,max-age=3600');return new Response(obj.value,{headers});}
+async function serveAsset(env,request,id){
+  await requireUser(env,request);
+  const asset=await env.DB.prepare('SELECT * FROM assets WHERE id=?').bind(id).first();
+  if(!asset)return new Response('Not found',{status:404});
+  const headersBase=new Headers();
+  headersBase.set('Content-Type',asset.mime_type||'application/octet-stream');
+  headersBase.set('Accept-Ranges','bytes');
+  headersBase.set('Cache-Control','private,max-age=3600');
+
+  if(!String(asset.storage_key||'').startsWith('uploads/chunked/')){
+    const obj=await env.CONTENT.getWithMetadata(asset.storage_key,{type:'stream'});
+    if(!obj?.value)return new Response('Not found',{status:404});
+    return new Response(obj.value,{headers:headersBase});
+  }
+
+  const total=Number(asset.size_bytes||0);
+  if(!total)return new Response('Not found',{status:404});
+  const range=request.headers.get('Range')||'';
+  let start=0,end=total-1,status=200;
+  if(range){
+    const m=/^bytes=(\\d*)-(\\d*)$/.exec(range.trim());
+    if(!m)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});
+    if(m[1]===''&&m[2]===''){
+      return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});
+    }
+    if(m[1]===''){
+      const suffix=Math.max(0,Number(m[2]||0));if(!suffix)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});start=Math.max(0,total-suffix);
+    }else{
+      start=Number(m[1]);
+      end=m[2]?Number(m[2]):total-1;
+    }
+    if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||start>=total||end<start)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});
+    end=Math.min(end,total-1);status=206;
+    headersBase.set('Content-Range',\`bytes \${start}-\${end}/\${total}\`);
+  }
+  headersBase.set('Content-Length',String(end-start+1));
+  const prefix=String(asset.storage_key).replace(/^uploads\/chunked\//,'');
+  const first=Math.floor(start/UPLOAD_CHUNK_BYTES),last=Math.floor(end/UPLOAD_CHUNK_BYTES);
+  if(last-first+1>50)return new Response('Requested range is too large',{status:416});
+  const stream=new ReadableStream({
+    start(controller){
+      (async()=>{
+        try{
+          for(let index=first;index<=last;index++){
+            const obj=await env.CONTENT.getWithMetadata(\`uploads/chunks/\${prefix}/\${index}\`,{type:'arrayBuffer'});
+            if(!obj?.value)throw new Error('Content chunk not found');
+            const bytes=new Uint8Array(obj.value);
+            const chunkStart=index*UPLOAD_CHUNK_BYTES;
+            const from=Math.max(0,start-chunkStart),to=Math.min(bytes.byteLength,end-chunkStart+1);
+            if(to>from)controller.enqueue(bytes.subarray(from,to));
+          }
+          controller.close();
+        }catch(error){controller.error(error)}
+      })();
+    },
+    cancel(){}
+  });
+  return new Response(stream,{status,headers:headersBase});
+}
 async function scormLaunch(env,request,id){const s=await requireUser(env,request);const pkg=await env.DB.prepare('SELECT * FROM scorm_packages WHERE id=?').bind(id).first();if(!pkg)return new Response('Not found',{status:404});if(pkg.course_id&&!(await env.DB.prepare("SELECT id FROM enrollments WHERE user_id=? AND course_id=? AND status IN ('active','completed')").bind(s.id,pkg.course_id).first())&&s.role!=='admin')return new Response('Forbidden',{status:403});const reg=await getRegistration(env,id,s.id);return new Response(playerHtml({registration:reg,user:s,contentBase:`/api/scorm-content/${id}`,launchPath:pkg.launch_path,version:pkg.version,csrfToken:s.csrf_token}),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
 async function scormContent(env,request,packageId,pathParts){const s=await requireUser(env,request);const pkg=await env.DB.prepare('SELECT * FROM scorm_packages WHERE id=?').bind(packageId).first();if(!pkg)return new Response('Not found',{status:404});if(pkg.course_id&&!(await env.DB.prepare("SELECT id FROM enrollments WHERE user_id=? AND course_id=? AND status IN ('active','completed')").bind(s.id,pkg.course_id).first())&&s.role!=='admin')return new Response('Forbidden',{status:403});const path=pathParts.map(decodeURIComponent).join('/');if(path.includes('..'))return new Response('Bad path',{status:400});const obj=await env.CONTENT.getWithMetadata(`${pkg.storage_prefix}/${path}`,{type:'stream'});if(!obj?.value)return new Response('Not found',{status:404});const headers=new Headers();headers.set('Content-Type',obj.metadata?.contentType||'application/octet-stream');headers.set('Cache-Control','private,max-age=600');return new Response(obj.value,{headers});}
 async function scormCommit(env,request,registrationId){const s=await authCsrf(env,request);const reg=await env.DB.prepare('SELECT r.*,p.course_id FROM scorm_registrations r JOIN scorm_packages p ON p.id=r.package_id WHERE r.id=?').bind(registrationId).first();if(!reg||reg.user_id!==s.id)return json({error:'Not found'},404);const result=await commitRegistration(env,reg,await bodyJson(request));if(result.complete){const lesson=await env.DB.prepare('SELECT id FROM lessons WHERE scorm_package_id=? LIMIT 1').bind(reg.package_id).first();if(lesson)await markLessonComplete(env,s.id,lesson.id,result.scoreRaw);}return json({ok:true,complete:result.complete});}
@@ -276,7 +424,11 @@ async function api(env,request){
       if(a==='enrollments'&&request.method==='GET')return enrollments(env,request);
       if(a==='enrollments'&&request.method==='POST')return enrollAdmin(env,request);
       if(a==='enrollment'&&parts[3]&&parts[4]==='status'&&request.method==='PATCH')return enrollmentStatus(env,request,parts[3]);
-      if(a==='assets')return assets(env,request);
+      if(a==='assets'&&request.method==='GET')return assets(env,request);
+      if(a==='assets'&&request.method==='POST')return assets(env,request);
+      if(a==='assets'&&parts[3]==='start'&&request.method==='POST')return assetUploadStart(env,request);
+      if(a==='assets'&&parts[3]==='chunk'&&request.method==='POST')return assetUploadChunk(env,request);
+      if(a==='assets'&&parts[3]==='finalize'&&request.method==='POST')return assetUploadFinalize(env,request);
       if(a==='asset'&&parts[3]&&request.method==='DELETE')return deleteAsset(env,request,parts[3]);
       if(a==='scorm'&&parts[3]==='upload'&&request.method==='POST')return scormUpload(env,request);
       if(a==='scorm'&&parts[3]==='packages'&&request.method==='GET')return scormPackages(env,request);
