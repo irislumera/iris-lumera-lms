@@ -359,7 +359,7 @@ async function deleteAsset(env,request,id){
 async function scormUpload(env,request){
   const s=await authCsrf(env,request,'admin');
   const url=new URL(request.url);
-  const selectedCourseId=url.searchParams.get('courseId')||null;
+  const courseId=url.searchParams.get('courseId')||null;
   const requestedModuleId=url.searchParams.get('moduleId')||null;
   const filename=cleanName(url.searchParams.get('filename')||'package.zip');
   const limit=Math.min(Number(env.SCORM_MAX_BYTES||26214400),25*1024*1024);
@@ -368,36 +368,24 @@ async function scormUpload(env,request){
   if(!request.body)return json({error:'SCORM upload body is empty'},400);
   const bytes=await request.arrayBuffer();
   if(bytes.byteLength<=0||bytes.byteLength>limit)return json({error:`SCORM package must be between 1 byte and ${Math.round(limit/1048576)} MiB in this free release`},413);
-
   const inspected=await inspectManifest(bytes);
-  let courseId=selectedCourseId;
-
-  if(!courseId){
-    const title=String(inspected.title||filename.replace(/\.zip$/i,'')||'Imported SCORM course').trim();
-    courseId=randomId();
-    const slug=await uniqueSlug(env,title);
-    const created=now();
-    await env.DB.prepare(`INSERT INTO courses(id,slug,title,short_description,description,category,level,status,cover_asset_id,xp_reward,certificate_enabled,passing_score,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(courseId,slug,title,'Imported SCORM learning package','Course created automatically from an imported SCORM package.','Imported content','Foundation','draft',null,200,1,70,created,created).run();
-    await audit(env,s.id,'course.created_from_scorm','course',courseId,{title,filename});
-  }
-
   const pkg=await persistScormPackage(env,s.id,courseId,filename,bytes,inspected);
-  let targetModule=requestedModuleId&&await env.DB.prepare('SELECT id FROM modules WHERE id=? AND course_id=?').bind(requestedModuleId,courseId).first();
-  if(!targetModule){
-    const m=randomId();
-    const position=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM modules WHERE course_id=?').bind(courseId).first())?.p||1);
-    await env.DB.prepare('INSERT INTO modules(id,course_id,title,description,position,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
-      .bind(m,courseId,'Interactive Modules','SCORM learning packages',position,40,now(),now()).run();
-    targetModule={id:m};
-  }
 
-  const lessonId=randomId();
-  const lp=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM lessons WHERE module_id=?').bind(targetModule.id).first())?.p||1);
-  await env.DB.prepare(`INSERT INTO lessons(id,module_id,title,type,body,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(lessonId,targetModule.id,inspected.title,'scorm','',pkg.id,Number(url.searchParams.get('duration')||15),lp,1,50,now(),now()).run();
-  await audit(env,s.id,'scorm.imported','scorm_package',pkg.id,{courseId,moduleId:targetModule.id,lessonId,version:inspected.version,autoCourse:!selectedCourseId});
-  return json({ok:true,autoCreatedCourse:!selectedCourseId,course:{id:courseId,title:inspected.title},package:{id:pkg.id,title:pkg.title,version:pkg.version,launchPath:pkg.launchPath,courseId,moduleId:targetModule.id,lessonId}},201);
+  let moduleId=null,lessonId=null;
+  if(courseId){
+    let target=requestedModuleId&&await env.DB.prepare('SELECT id FROM modules WHERE id=? AND course_id=?').bind(requestedModuleId,courseId).first();
+    if(!target){
+      const mid=randomId(),position=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM modules WHERE course_id=?').bind(courseId).first())?.p||1);
+      await env.DB.prepare('INSERT INTO modules(id,course_id,title,description,position,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(mid,courseId,'Course Content','Published learning content',position,40,now(),now()).run();
+      target={id:mid};
+    }
+    moduleId=target.id;
+    const position=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM lessons WHERE module_id=?').bind(moduleId).first())?.p||1);
+    lessonId=randomId();
+    await env.DB.prepare('INSERT INTO lessons(id,module_id,title,type,body,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(lessonId,moduleId,inspected.title,'scorm','',pkg.id,15,position,1,50,now(),now()).run();
+  }
+  await audit(env,s.id,'scorm.imported','scorm_package',pkg.id,{courseId,moduleId,lessonId,version:inspected.version});
+  return json({ok:true,courseId,package:{id:pkg.id,assetId:pkg.assetId,title:pkg.title,version:pkg.version,launchPath:pkg.launchPath,courseId,moduleId,lessonId}},201);
 }
 
 async function scormPackages(env,request){await authCsrf(env,request,'admin');const rows=await env.DB.prepare(`SELECT p.*,c.title course_title,(SELECT COUNT(*) FROM lessons l WHERE l.scorm_package_id=p.id) lessons FROM scorm_packages p LEFT JOIN courses c ON c.id=p.course_id ORDER BY p.created_at DESC`).all();return json({packages:rows.results||[]});}
