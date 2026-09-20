@@ -177,6 +177,7 @@ async function enrollAdmin(env,request,id=null){
   if(!user)return json({error:'Learner not found'},404);
   const course=await env.DB.prepare("SELECT * FROM courses WHERE id=?").bind(courseId).first();
   if(!course)return json({error:'Course not found'},404);
+  if(course.status!=='published')return json({error:'Publish the course before assigning it to a learner'},409);
   const existing=await env.DB.prepare('SELECT id FROM enrollments WHERE user_id=? AND course_id=?').bind(userId,courseId).first();
   const t=now(),dueAt=String(b.dueAt||'').trim()||null,expiresAt=String(b.expiresAt||'').trim()||null;
   let enrollmentId;
