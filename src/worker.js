@@ -533,8 +533,8 @@ async function api(env,request){
       if(a==='courses'&&request.method==='POST')return saveCourse(env,request,null);
       if(a==='course'&&parts[3]&&parts[4]==='modules'&&request.method==='POST')return saveModule(env,request,parts[3],null);
       if(a==='course'&&parts[3]&&request.method==='GET')return courseDetail(env,request,parts[3],true);
-      if(a==='course'&&parts[3]&&request.method==='POST')return saveCourse(env,request,parts[3]);
       if(a==='course'&&parts[3]&&parts[4]==='content'&&request.method==='POST')return attachCourseContent(env,request,parts[3]);
+      if(a==='course'&&parts[3]&&request.method==='POST')return saveCourse(env,request,parts[3]);
       if(a==='module'&&parts[3]&&request.method==='PATCH')return saveModule(env,request,null,parts[3]);
       if(a==='module'&&parts[3]&&request.method==='DELETE')return deleteModule(env,request,parts[3]);
       if(a==='module'&&parts[3]&&parts[4]==='lessons'&&request.method==='POST')return saveLesson(env,request,parts[3],null);
