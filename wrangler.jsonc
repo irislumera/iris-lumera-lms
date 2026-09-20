@@ -16,12 +16,6 @@
       "migrations_dir": "migrations"
     }
   ],
-  "r2_buckets": [
-    {
-      "binding": "CONTENT",
-      "bucket_name": "iris-lumera-content"
-    }
-  ],
   "vars": {
     "APP_NAME": "IRIS LUMERA",
     "SUPPORT_EMAIL": "irislumera@hotmail.com",
