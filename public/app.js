@@ -337,17 +337,14 @@ async function uploadContentFromModal(form){
     toast(err.message);
   }finally{button.disabled=false}
 }
+function contentUploadForm(){
+  return '<form id="content-upload-form" class="form-grid"><div class="wide"><div class="field"><label>Content type</label><select class="select" id="content-type"><option value="video">Video</option><option value="read">Read / PDF</option><option value="audio">Audio</option><option value="presentation">Presentation</option><option value="other">Other file</option><option value="scorm">SCORM 1.2 / 2004</option></select></div></div><div class="wide"><div class="field"><label>File</label><input class="input" id="content-file" type="file" required></div></div><div><div class="field"><label>Title</label><input class="input" id="content-title"></div></div><div><div class="field"><label>Duration (minutes)</label><input class="input" id="content-duration" type="number" min="0" value="0"></div></div><div class="wide"><div class="field"><label>Description</label><textarea class="textarea" id="content-description"></textarea></div></div><div><div class="field"><label>Initial status</label><select class="select" id="content-status"><option value="draft">Draft</option><option value="published">Published</option></select></div></div><div class="wide" id="content-upload-status"></div><div class="wide inline-actions"><button type="button" class="btn btn-quiet" id="content-cancel">Cancel</button><button type="submit" class="btn btn-primary" id="content-upload-submit">Upload content</button></div></form>';
+}
 async function adminContent(c){
-  const d=await api('/api/admin/assets');
-  const items=(d.assets||[]).filter(x=>!['course-cover','certificate-background'].includes(x.kind));
-  c.innerHTML='<div class="section-head"><div><span class="tag">CONTENT LIBRARY</span><h2 style="font-size:34px;margin-top:10px">Learning content</h2><p>One place for video, reading, audio, presentations and SCORM. Upload once, publish once, reuse across courses.</p></div><button class="btn btn-primary" id="open-content-upload">+ Upload content</button></div>'+
-    '<div class="toolbar"><div class="toolbar-left"><input id="content-search" class="input search" placeholder="Search content"></div><div class="toolbar-right"><select id="content-status-filter" class="select"><option value="">All statuses</option><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></div></div>'+
-    '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Content</th><th>Type</th><th>Duration</th><th>Size</th><th>Status</th><th>Courses</th><th>Actions</th></tr></thead><tbody id="content-rows">'+
-    (items.length?items.map(x=>'<tr data-search="'+esc((x.title||x.filename)+' '+x.kind).toLowerCase()+'"><td><b>'+esc(x.title||x.filename)+'</b><div class="muted tiny">'+esc(x.filename)+'</div></td><td>'+esc(x.kind==='pdf'?'Read':x.kind==='scorm'?'SCORM':x.kind)+'</td><td>'+Number(x.duration_minutes||0)+' min</td><td>'+bytes(x.size_bytes)+'</td><td><span class="pill '+esc(x.status||'draft')+'">'+esc(x.status||'draft')+'</span></td><td>'+Number(x.usage_courses||0)+'</td><td><div class="inline-actions"><button class="btn btn-quiet btn-small content-edit" data-id="'+encodeURIComponent(x.id)+'">Edit</button>'+
-      (x.status==='published'?'<button class="btn btn-danger btn-small content-publish" data-id="'+encodeURIComponent(x.id)+'" data-status="draft">Unpublish</button>':'<button class="btn btn-good btn-small content-publish" data-id="'+encodeURIComponent(x.id)+'" data-status="published">Publish</button>')+
-    '</div></td></tr>').join(''):'<tr><td colspan="7">No learning content yet. Upload your first item.</td></tr>')+
-    '</tbody></table></div></section>';
-  $('#open-content-upload').onclick=()=>{const wrap=modal('Upload learning content',contentUploadForm(),async e=>{await uploadContentFromModal(e.currentTarget)});$('#content-cancel',wrap).onclick=closeModal};
+  const d=await api('/api/admin/assets'),items=(d.assets||[]).filter(x=>!['course-cover','certificate-background'].includes(x.kind));
+  c.innerHTML='<div class="section-head"><div><span class="tag">CONTENT LIBRARY</span><h2 style="font-size:34px;margin-top:10px">Learning content</h2><p>One library for video, reading, audio, presentations and SCORM. Upload once and reuse across courses.</p></div><button class="btn btn-primary" id="open-content-upload">+ Upload content</button></div><div class="toolbar"><div class="toolbar-left"><input id="content-search" class="input search" placeholder="Search content"></div><div class="toolbar-right"><select id="content-status-filter" class="select"><option value="">All statuses</option><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></div></div><section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Content</th><th>Type</th><th>Duration</th><th>Size</th><th>Status</th><th>Courses</th><th>Actions</th></tr></thead><tbody id="content-rows">'+(items.length?items.map(x=>'<tr data-search="'+esc((x.title||x.filename)+' '+x.kind).toLowerCase()+'"><td><b>'+esc(x.title||x.filename)+'</b><div class="muted tiny">'+esc(x.filename)+'</div></td><td>'+esc(x.kind==='pdf'?'Read':x.kind==='scorm'?'SCORM':x.kind)+'</td><td>'+Number(x.duration_minutes||0)+' min</td><td>'+bytes(x.size_bytes)+'</td><td><span class="pill '+esc(x.status||'draft')+'">'+esc(x.status||'draft')+'</span></td><td>'+Number(x.usage_courses||0)+'</td><td><div class="inline-actions"><button type="button" class="btn btn-quiet btn-small content-edit" data-id="'+encodeURIComponent(x.id)+'">Edit</button>'+(x.status==='published'?'<button type="button" class="btn btn-danger btn-small content-publish" data-id="'+encodeURIComponent(x.id)+'" data-status="draft">Unpublish</button>':'<button type="button" class="btn btn-good btn-small content-publish" data-id="'+encodeURIComponent(x.id)+'" data-status="published">Publish</button>')+'</div></td></tr>').join(''):'<tr><td colspan="7">No learning content yet. Upload your first item.</td></tr>')+'</tbody></table></div></section>';
+  const wrap=document.getElementById('open-content-upload');
+  wrap.onclick=()=>{const modalWrap=modal('Upload learning content',contentUploadForm(),async e=>uploadContentFromLibrary());$('#content-cancel',modalWrap).onclick=closeModal};
   $$('.content-edit',c).forEach(btn=>btn.onclick=()=>editContent(btn.dataset.id));
   $$('.content-publish',c).forEach(btn=>btn.onclick=()=>publishContent(btn.dataset.id,btn.dataset.status));
   $('#content-search',c).oninput=filterContent;
@@ -355,7 +352,62 @@ async function adminContent(c){
 }
 function filterContent(){
   const q=($('#content-search')?.value||'').toLowerCase(),status=($('#content-status-filter')?.value||'').toLowerCase();
-  $$('#content-rows tr').forEach(row=>{const text=(row.dataset.search||row.textContent||'').toLowerCase(),state=(row.querySelector('.pill')?.textContent||'').toLowerCase();row.classList.toggle('hidden',!!(q&&!text.includes(q))||!!(status&&state!==status))});
+  $$('#content-rows tr').forEach(row=>{const txt=(row.dataset.search||row.textContent||'').toLowerCase(),state=(row.querySelector('.pill')?.textContent||'').toLowerCase();row.classList.toggle('hidden',!!(q&&!txt.includes(q))||!!(status&&state!==status))});
+}
+
+async function uploadContentFile(file,kind,title,description,duration,status,onProgress){
+  const max=500*1024*1024;
+  if(!file||file.size<=0)throw new Error('Choose a valid file.');
+  if(file.size>max)throw new Error('Content files are limited to 500 MB.');
+  const mime=file.type||'application/octet-stream';
+  if(file.size<=25*1024*1024){
+    const url='/api/admin/assets?filename='+encodeURIComponent(file.name)+'&courseId=&kind='+encodeURIComponent(kind||'general')+'&title='+encodeURIComponent(title)+'&description='+encodeURIComponent(description)+'&duration='+encodeURIComponent(duration)+'&status='+encodeURIComponent(status);
+    return xhrUpload(url,file,p=>onProgress('Uploading',p));
+  }
+  const started=await api('/api/admin/assets/start',{method:'POST',body:JSON.stringify({filename:file.name,courseId:'',mimeType:mime,kind:kind||'general',size:file.size})});
+  const chunkSize=Number(started.chunkSize||20*1024*1024),total=Number(started.totalChunks||Math.ceil(file.size/chunkSize));
+  for(let index=0;index<total;index++){
+    const from=index*chunkSize,to=Math.min(file.size,from+chunkSize);
+    await xhrUpload('/api/admin/assets/chunk?uploadId='+encodeURIComponent(started.uploadId)+'&index='+index,file.slice(from,to),p=>onProgress('Uploading part '+(index+1)+' of '+total,Math.round((from+(to-from)*p/100)/file.size*100)));
+  }
+  const result=await api('/api/admin/assets/finalize',{method:'POST',body:JSON.stringify({uploadId:started.uploadId})});
+  await api('/api/admin/asset/'+encodeURIComponent(result.asset.id),{method:'PATCH',body:JSON.stringify({title,description,duration,status})});
+  return result;
+}
+async function uploadContentFromLibrary(){
+  const form=document.getElementById('content-upload-form');if(!form)return;
+  const file=$('#content-file',form)?.files?.[0];if(!file)return toast('Choose a file.');
+  const type=$('#content-type',form).value;
+  const title=($('#content-title',form).value||file.name).trim();
+  const description=$('#content-description',form).value||'';
+  const duration=Number($('#content-duration',form).value||0);
+  const status=$('#content-status',form).value;
+  const box=$('#content-upload-status',form),button=$('#content-upload-submit',form);
+  button.disabled=true;
+  const show=(label,pct)=>{box.innerHTML='<div class="upload-state">'+esc(label)+' <b>'+pct+'%</b></div><div class="upload-progress"><i style="width:'+pct+'%"></i></div>'};
+  try{
+    if(type==='scorm'){
+      if(file.size>25*1024*1024)throw new Error('SCORM ZIP is limited to 25 MiB in free storage mode.');
+      show('Uploading SCORM',0);
+      const r=await xhrUpload('/api/admin/scorm/upload?filename='+encodeURIComponent(file.name),file,p=>show('Uploading SCORM',p));
+      if(!r.package?.assetId)throw new Error('SCORM import completed without creating a content-library item.');
+      show('SCORM extracted and indexed',100);
+      await api('/api/admin/asset/'+encodeURIComponent(r.package.assetId),{method:'PATCH',body:JSON.stringify({title:r.package.title||title,description,duration,status})});
+    }else{
+      await uploadContentFile(file,({video:'video',read:'pdf',audio:'audio',presentation:'presentation',other:'general'})[type]||'general',title,description,duration,status,show);
+    }
+    box.innerHTML='<div class="upload-success">Content saved to the Content Library ✓</div><div class="upload-progress"><i style="width:100%"></i></div>';
+    toast('Content uploaded.');
+    setTimeout(async()=>{closeModal();await adminContent(document.getElementById('admin-content'));},400);
+  }catch(err){
+    box.innerHTML='<div class="upload-failed">Upload failed: '+esc(err.message)+'</div>';
+    toast(err.message);
+  }finally{button.disabled=false}
+}
+async function editContent(id){
+  const d=await api('/api/admin/assets'),item=d.assets.find(x=>x.id===id);if(!item)return;
+  const html='<form id="modal-form" class="form-grid"><div class="wide"><div class="field"><label>Title</label><input class="input" name="title" value="'+esc(item.title||item.filename)+'" required></div></div><div><div class="field"><label>Duration (minutes)</label><input class="input" type="number" min="0" name="duration" value="'+Number(item.duration_minutes||0)+'"></div></div><div><div class="field"><label>Status</label><select class="select" name="status"><option value="draft" '+(item.status==='draft'?'selected':'')+'>Draft</option><option value="published" '+(item.status==='published'?'selected':'')+'>Published</option><option value="archived" '+(item.status==='archived'?'selected':'')+'>Archived</option></select></div></div><div class="wide"><div class="field"><label>Description</label><textarea class="textarea" name="description">'+esc(item.description||'')+'</textarea></div></div><div class="wide inline-actions"><button type="button" class="btn btn-quiet" onclick="closeModal()">Cancel</button><button class="btn btn-primary">Save content</button></div></form>';
+  modal('Edit content',html,async e=>{try{const v=Object.fromEntries(new FormData(e.currentTarget));await api('/api/admin/asset/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({title:v.title,description:v.description,duration:Number(v.duration||0),status:v.status})});closeModal();toast('Content updated.');await adminContent(document.getElementById('admin-content'))}catch(err){toast(err.message)}});
 }
 
 async function removeAsset(id){if(!confirm('Delete this stored asset?'))return;try{await api(`/api/admin/asset/${id}`,{method:'DELETE',body:'{}'});toast('Asset deleted.');nav('admin',{tab:'content'})}catch(e){toast(e.message)}}
