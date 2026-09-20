@@ -232,12 +232,13 @@ async function assetUploadChunk(env,request){
   const meta=await env.CONTENT.get(`uploads/meta/${uploadId}`,{type:'json'});
   if(!meta||meta.createdBy!==s.id)return json({error:'Upload not found'},404);
   if(index<0||index>=meta.totalChunks)return json({error:'Invalid chunk index'},400);
-  const size=Number(request.headers.get('Content-Length')||0);
-  if(size<=0||size>UPLOAD_CHUNK_BYTES)return json({error:'Invalid chunk size'},413);
   if(!request.body)return json({error:'Chunk body is empty'},400);
-  await env.CONTENT.put(`uploads/chunks/${uploadId}/${index}`,request.body,{metadata:{contentType:meta.mime}});
+  const bytes=await request.arrayBuffer();
+  if(bytes.byteLength<=0||bytes.byteLength>UPLOAD_CHUNK_BYTES)return json({error:'Invalid chunk size'},413);
+  await env.CONTENT.put(`uploads/chunks/${uploadId}/${index}`,bytes,{metadata:{contentType:meta.mime}});
   return json({ok:true,index});
 }
+
 async function assetUploadFinalize(env,request){
   const s=await authCsrf(env,request,'admin');
   const b=await bodyJson(request);
