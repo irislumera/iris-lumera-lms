@@ -28,30 +28,20 @@ async function loadMe(){const d=await api('/api/auth/me');ME=d.authenticated?d.u
 async function logout(){await api('/api/auth/logout',{method:'POST',body:'{}'});ME=null;CSRF='';nav('login')}
 function loginView(){
   app.innerHTML='<div class="login"><div class="login-card"><div class="brand"><span class="mark">I</span><span class="brandtext">IRIS LUMERA<small>LEARN. APPLY. BECOME.</small></span></div><h1>Welcome back.</h1><p>Sign in to continue your learning journey.</p><form id="login-form"><div class="field"><label>Email</label><input class="input" type="email" name="email" autocomplete="username" required></div><div class="field" style="margin-top:12px"><label>Password</label><input class="input" type="password" name="password" autocomplete="current-password" required></div><button class="btn btn-primary" style="width:100%;margin-top:16px">Sign in</button></form><div class="auth-switch"><span>New to IRIS LUMERA?</span><button class="btn btn-quiet btn-small" id="create-account">Create learner account</button></div><div class="callout" style="margin-top:16px">Need help? Contact <b>${SUPPORT}</b></div><p id="login-msg" class="danger-note"></p></div></div>';
-  document.getElementById('login-form').onsubmit=async function(e){
-    e.preventDefault();
-    var fd=new FormData(e.currentTarget);
-    try{
-      var d=await api('/api/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(fd))});
-      ME=d.user;CSRF=d.csrfToken||'';
-      toast(d.mustChangePassword?'Welcome. Please update your temporary password.':'Welcome back.');
-      nav('learning');
-    }catch(err){document.getElementById('login-msg').textContent=err.message}
-  };
+  document.getElementById('login-form').onsubmit=async function(e){e.preventDefault();var fd=new FormData(e.currentTarget);try{var d=await api('/api/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(fd))});ME=d.user;CSRF=d.csrfToken||'';toast('Welcome back.');nav('learning')}catch(err){if(err.message.indexOf('verify your email')>=0){nav('verify',{email:fd.get('email')});return}document.getElementById('login-msg').textContent=err.message}};
   document.getElementById('create-account').onclick=function(){nav('register')};
 }
 function registerView(){
   app.innerHTML='<div class="login"><div class="login-card"><div class="brand"><span class="mark">I</span><span class="brandtext">IRIS LUMERA<small>LEARN. APPLY. BECOME.</small></span></div><span class="tag">Learner account</span><h1>Create your account.</h1><p>All self-registered accounts are learners. Administrator access is granted separately.</p><form id="register-form" class="form-grid"><div><div class="field"><label>First name</label><input class="input" name="firstName" required></div></div><div><div class="field"><label>Last name</label><input class="input" name="lastName" required></div></div><div class="wide"><div class="field"><label>Email</label><input class="input" type="email" name="email" required autocomplete="email"></div></div><div><div class="field"><label>Employee ID (optional)</label><input class="input" name="employeeId"></div></div><div><div class="field"><label>Department (optional)</label><input class="input" name="department"></div></div><div><div class="field"><label>Job title (optional)</label><input class="input" name="jobTitle"></div></div><div><div class="field"><label>Password</label><input class="input" type="password" name="password" minlength="10" required autocomplete="new-password"></div></div><div><div class="field"><label>Confirm password</label><input class="input" type="password" name="confirmPassword" minlength="10" required autocomplete="new-password"></div></div><div class="wide"><button class="btn btn-primary" style="width:100%">Create learner account</button></div></form><div class="auth-switch"><span>Already registered?</span><button class="btn btn-quiet btn-small" id="back-login">Sign in</button></div><p id="register-msg" class="danger-note"></p></div></div>';
-  document.getElementById('register-form').onsubmit=async function(e){
-    e.preventDefault();
-    var b=Object.fromEntries(new FormData(e.currentTarget));
-    if(b.password!==b.confirmPassword){document.getElementById('register-msg').textContent='Passwords do not match.';return}
-    delete b.confirmPassword;
-    try{await api('/api/auth/register',{method:'POST',body:JSON.stringify(b)});toast('Learner account created. Please sign in.');nav('login')}catch(err){document.getElementById('register-msg').textContent=err.message}
-  };
+  document.getElementById('register-form').onsubmit=async function(e){e.preventDefault();var b=Object.fromEntries(new FormData(e.currentTarget));if(b.password!==b.confirmPassword){document.getElementById('register-msg').textContent='Passwords do not match.';return}delete b.confirmPassword;try{var r=await api('/api/auth/register',{method:'POST',body:JSON.stringify(b)});toast(r.emailSent?'Verification code sent to your email.':'Account created. Verify your email when the verification service is active.');nav('verify',{email:b.email})}catch(err){document.getElementById('register-msg').textContent=err.message}};
   document.getElementById('back-login').onclick=function(){nav('login')};
 }
-
+function verifyView(email){
+  var em=decodeURIComponent(email||'');
+  app.innerHTML='<div class="login"><div class="login-card"><div class="brand"><span class="mark">I</span><span class="brandtext">IRIS LUMERA<small>LEARN. APPLY. BECOME.</small></span></div><span class="tag">Email verification</span><h1>Check your inbox.</h1><p>Enter the six-digit code sent to <b>'+esc(em)+'</b>.</p><form id="verify-form"><div class="field"><label>Verification code</label><input class="input" name="code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" required></div><button class="btn btn-primary" style="width:100%;margin-top:16px">Verify email</button></form><div class="auth-switch"><span>Didn't receive it?</span><button class="btn btn-quiet btn-small" id="resend-code">Send new code</button></div><p id="verify-msg" class="danger-note"></p></div></div>';
+  document.getElementById('verify-form').onsubmit=async function(e){e.preventDefault();try{await api('/api/auth/verify',{method:'POST',body:JSON.stringify({email:em,code:e.currentTarget.code.value})});toast('Email verified. Please sign in.');nav('login')}catch(err){document.getElementById('verify-msg').textContent=err.message}};
+  document.getElementById('resend-code').onclick=async function(){try{var r=await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({email:em})});document.getElementById('verify-msg').textContent=r.emailSent?'A new verification code was sent.':'Verification email provider is not configured yet.'}catch(err){document.getElementById('verify-msg').textContent=err.message}};
+}
 function heroLearning(data){const xp=Number(data.user.xp||0),lvl=level(xp),pct=levelProgress(xp),next=nextLevelXp(xp);const activeCourse=data.courses.find(c=>c.progress<100);return `<div class="hero-grid"><section class="hero"><div class="eyebrow">IRIS LUMERA · PERSONAL LEARNING OS</div><h1>${activeCourse?'Keep your momentum.':'Your learning journey starts here.'}</h1><p>${activeCourse?`Continue <b>${esc(activeCourse.title)}</b> and turn the next completed lesson into real progress.`:'Your learning space is ready. Complete modules, build your XP and collect proof of what you have learned.'}</p><div class="actions"><button class="btn btn-primary" onclick="${activeCourse?`nav('course',{slug:'${encodeURIComponent(activeCourse.slug)}'})`:`nav('learning')`}">${activeCourse?'Continue learning':'Open my learning'}</button><button class="btn btn-outline" onclick="nav('account')">My profile</button></div></section><aside class="xp-panel"><div class="xp-row"><div><div class="eyebrow" style="color:#8890a7;opacity:1">CURRENT LEVEL</div><div class="xp-value">${xp} XP</div><span class="level-badge">Level ${lvl} · ${next-xp} XP to next</span></div><div class="xp-ring" style="--pct:${pct}%"><b>${pct}%</b></div></div><div class="xp-progress"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:7px"><span>Level progress</span><span>${next-xp} XP left</span></div><div class="bar"><i style="width:${pct}%"></i></div></div></aside></div><div class="stat-grid"><div class="stat-card"><div class="k">Courses</div><div class="v">${data.courses.length}</div></div><div class="stat-card"><div class="k">Completed</div><div class="v">${data.courses.filter(c=>c.progress>=100).length}</div></div><div class="stat-card"><div class="k">Certificates</div><div class="v">${data.certificates.length}</div></div><div class="stat-card"><div class="k">Badges</div><div class="v">${data.achievements.length}</div></div></div>`}
 function courseCard(c){const pct=Number(c.progress||0);return `<article class="card course-card"><div class="course-cover">${c.cover_asset_id?`<img src="/api/assets/${encodeURIComponent(c.cover_asset_id)}" alt="">`:''}</div><div class="course-body"><span class="tag">${esc(c.category)}</span><h3>${esc(c.title)}</h3><p>${esc(c.short_description||c.description||'Practical workplace learning, built to be applied.')}</p><div class="meta-row"><span class="meta-pill">${esc(c.level)}</span><span class="meta-pill">${Number(c.xp_reward||0)} XP course reward</span></div><div style="margin-top:15px"><div class="progress-label"><span>Progress</span><b>${pct}%</b></div><div class="bar"><i style="width:${pct}%"></i></div></div><div class="course-bottom"><span class="muted small">${c.enrollment_status==='completed'?'Completed':`${Number(c.completed_count||0)} / ${Number(c.required_count||0)} required`}</span><button class="btn btn-quiet btn-small" onclick="nav('course',{slug:'${encodeURIComponent(c.slug)}'})">Open course</button></div></div></article>`}
 async function learning(){const data=await api('/api/learning');shell(`${heroLearning(data)}<section class="section"><div class="section-head"><div><h2>My learning</h2><p>Assigned courses, progress and completion status in one place.</p></div></div>${data.courses.length?`<div class="grid-3">${data.courses.map(courseCard).join('')}</div>`:`<div class="empty">No courses have been assigned yet. Your administrator can add one from the Admin workspace.</div>`}</section><section class="section"><div class="section-head"><div><h2>Your achievements</h2><p>Small milestones that make learning visible.</p></div></div>${data.achievements.length?`<div class="achievement-strip">${data.achievements.map(a=>`<div class="achievement"><div class="icon">${esc(a.icon)}</div><b>${esc(a.name)}</b><span>${esc(a.description)}</span><span style="margin-top:9px">Awarded ${fmtDate(a.awarded_at)}</span></div>`).join('')}</div>`:`<div class="empty">Complete your first lesson to unlock your first badge.</div>`}</section>`)}
@@ -231,8 +221,10 @@ async function uploadAssetFile(file,courseId,kind,onProgress=()=>{}){
   return api('/api/admin/assets/finalize',{method:'POST',body:JSON.stringify({uploadId:started.uploadId})});
 }
 
-function courseEditorForm(co={},assets=[]){
-  const currentCover=assets.find(a=>a.id===co.cover_asset_id);
+function courseEditorForm(co={},assets=[],selectedContent=[]){
+  const published=assets.filter(x=>x.status==='published'&&!['course-cover','certificate-background'].includes(x.kind));
+  const picks=published.map(x=>'<label class="option content-pick"><input type="checkbox" name="contentIds[]" value="'+esc(x.id)+'" '+(selectedContent.includes(x.id)?'checked':'')+'><span><b>'+esc(x.title||x.filename)+'</b><small style="display:block;color:var(--muted);margin-top:3px">'+esc(x.kind==='pdf'?'Read':x.kind==='scorm'?'SCORM':x.kind)+' · '+Number(x.duration_minutes||0)+' min</small></span></label>').join('');
+  const currentCover=assets.find(x=>x.id===co.cover_asset_id);
   return '<form id="modal-form" class="form-grid">'+
     '<div class="wide"><div class="field"><label>Course title</label><input class="input" name="title" value="'+esc(co.title||'')+'" required></div></div>'+
     '<div><div class="field"><label>Category</label><input class="input" name="category" value="'+esc(co.category||'Professional Skills')+'"></div></div>'+
@@ -241,9 +233,8 @@ function courseEditorForm(co={},assets=[]){
     '<div><div class="field"><label>Estimated duration (minutes)</label><input class="input" type="number" min="1" name="estimatedMinutes" value="'+Number(co.estimated_minutes||30)+'"></div></div>'+
     '<div><div class="field"><label>Course XP reward</label><input class="input" type="number" min="0" name="xpReward" value="'+Number(co.xp_reward||200)+'"></div></div>'+
     '<div><div class="field"><label>Passing score</label><input class="input" type="number" min="0" max="100" name="passingScore" value="'+Number(co.passing_score||70)+'"></div></div>'+
-    '<div class="wide"><div class="field"><label>Course cover photo</label><input class="input" id="course-cover-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif">'+
-      (currentCover?'<div class="help" style="margin-top:6px">Current cover: '+esc(currentCover.filename)+'</div>':'<div class="help" style="margin-top:6px">Choose the course image here. It will be stored and linked automatically.</div>')+
-    '</div></div>'+
+    '<div class="wide"><div class="field"><label>Course cover photo</label><input class="input" id="course-cover-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif">'+(currentCover?'<div class="help" style="margin-top:6px">Current cover: '+esc(currentCover.filename)+'</div>':'<div class="help" style="margin-top:6px">Upload the cover image here.</div>')+'</div></div>'+
+    '<div class="wide panel" style="padding:16px"><div class="field"><label>Learning content</label><p class="help">Select published items from the Content Library. The LMS will add them automatically to this course.</p><div class="content-picks">'+(picks||'<div class="empty">No published content yet. Upload and publish content first.</div>')+'</div></div></div>'+
     '<div class="wide"><div class="field"><label>Short description</label><input class="input" name="shortDescription" value="'+esc(co.short_description||'')+'"></div></div>'+
     '<div class="wide"><div class="field"><label>Description</label><textarea class="textarea" name="description">'+esc(co.description||'')+'</textarea></div></div>'+
     '<div class="wide"><label class="option"><input type="checkbox" name="certificateEnabled" '+(co.certificate_enabled===0?'':'checked')+'><span>Issue completion certificate</span></label></div>'+
@@ -255,30 +246,26 @@ async function newCourse(){
   modal('Create course',courseEditorForm({},a.assets),async e=>{
     const form=e.currentTarget;
     try{
-      const data=normalizeForm(form);
+      const data=normalizeForm(form),contentIds=[...form.querySelectorAll('[name="contentIds[]"]:checked')].map(x=>x.value);
       const r=await api('/api/admin/courses',{method:'POST',body:JSON.stringify(data)});
       const cover=form.querySelector('#course-cover-file')?.files?.[0];
-      if(cover){
-        const up=await uploadAssetFile(cover,r.id,'course-cover');
-        await api('/api/admin/course/'+encodeURIComponent(r.id),{method:'POST',body:JSON.stringify({...data,coverAssetId:up.asset.id})});
-      }
+      if(cover){const up=await uploadAssetFile(cover,r.id,'course-cover');await api('/api/admin/course/'+encodeURIComponent(r.id),{method:'POST',body:JSON.stringify({...data,coverAssetId:up.asset.id})});}
+      if(contentIds.length)await api('/api/admin/course/'+encodeURIComponent(r.id)+'/content',{method:'POST',body:JSON.stringify({contentIds})});
       closeModal();toast('Course created.');await adminCourses(document.getElementById('admin-content'));
     }catch(err){toast(err.message)}
   });
 }
 async function editCourse(id){
-  const co=(ADMIN_CACHE.courses||[]).find(x=>x.id===id);
-  const a=await api('/api/admin/assets');
-  modal('Edit course',courseEditorForm(co,a.assets),async e=>{
+  const co=(ADMIN_CACHE.courses||[]).find(x=>x.id===id),detail=await api('/api/admin/course/'+encodeURIComponent(id)),a=await api('/api/admin/assets');
+  const selected=detail.modules.flatMap(m=>m.lessons||[]).map(l=>l.asset_id).filter(Boolean);
+  modal('Edit course',courseEditorForm(co,a.assets,selected),async e=>{
     const form=e.currentTarget;
     try{
-      const data=normalizeForm(form);
+      const data=normalizeForm(form),contentIds=[...form.querySelectorAll('[name="contentIds[]"]:checked')].map(x=>x.value);
       await api('/api/admin/course/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify(data)});
       const cover=form.querySelector('#course-cover-file')?.files?.[0];
-      if(cover){
-        const up=await uploadAssetFile(cover,id,'course-cover');
-        await api('/api/admin/course/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({...data,coverAssetId:up.asset.id})});
-      }
+      if(cover){const up=await uploadAssetFile(cover,id,'course-cover');await api('/api/admin/course/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({...data,coverAssetId:up.asset.id})});}
+      if(contentIds.length)await api('/api/admin/course/'+encodeURIComponent(id)+'/content',{method:'POST',body:JSON.stringify({contentIds})});
       closeModal();toast('Course updated.');await adminCourses(document.getElementById('admin-content'));
     }catch(err){toast(err.message)}
   });
@@ -498,5 +485,5 @@ window.addOption=async function(qid){
 };
 
 window.addEventListener('popstate',boot);
-async function boot(){try{await loadMe();const screen=new URLSearchParams(location.search).get('screen')||'home';if(!ME&&!['login','register'].includes(screen))return nav('login');if(screen==='login')return ME?nav('home'):loginView();if(screen==='register')return ME?nav('home'):registerView();if(screen==='home')return home();if(screen==='learning')return learning();if(screen==='course')return course(new URLSearchParams(location.search).get('slug'));if(screen==='lesson')return lesson(new URLSearchParams(location.search).get('id'));if(screen==='certificates')return certificates();if(screen==='account')return account();if(screen==='admin')return admin();return home()}catch(e){app.innerHTML=`<div class="login"><div class="login-card"><h1>IRIS LUMERA</h1><p>${esc(e.message)}</p><button class="btn btn-primary" onclick="nav('home')">Return home</button></div></div>`}}
+async function boot(){try{await loadMe();const screen=new URLSearchParams(location.search).get('screen')||'home';if(!ME&&!['login','register','verify'].includes(screen))return nav('login');if(screen==='login')return ME?nav('home'):loginView();if(screen==='register')return ME?nav('home'):registerView();if(screen==='verify')return ME?nav('home'):verifyView(new URLSearchParams(location.search).get('email')||'');if(screen==='home')return home();if(screen==='learning')return learning();if(screen==='course')return course(new URLSearchParams(location.search).get('slug'));if(screen==='lesson')return lesson(new URLSearchParams(location.search).get('id'));if(screen==='certificates')return certificates();if(screen==='account')return account();if(screen==='admin')return admin();return home()}catch(e){app.innerHTML=`<div class="login"><div class="login-card"><h1>IRIS LUMERA</h1><p>${esc(e.message)}</p><button class="btn btn-primary" onclick="nav('home')">Return home</button></div></div>`}}
 boot();
