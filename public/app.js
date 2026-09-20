@@ -404,6 +404,14 @@ async function uploadContentFromLibrary(){
     toast(err.message);
   }finally{button.disabled=false}
 }
+async function publishContent(id,status){
+  try{
+    await api('/api/admin/asset/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({status})});
+    toast(status==='published'?'Content published.':'Content moved to draft.');
+    await adminContent(document.getElementById('admin-content'));
+  }catch(e){toast(e.message)}
+}
+
 async function editContent(id){
   const d=await api('/api/admin/assets'),item=d.assets.find(x=>x.id===id);if(!item)return;
   const html='<form id="modal-form" class="form-grid"><div class="wide"><div class="field"><label>Title</label><input class="input" name="title" value="'+esc(item.title||item.filename)+'" required></div></div><div><div class="field"><label>Duration (minutes)</label><input class="input" type="number" min="0" name="duration" value="'+Number(item.duration_minutes||0)+'"></div></div><div><div class="field"><label>Status</label><select class="select" name="status"><option value="draft" '+(item.status==='draft'?'selected':'')+'>Draft</option><option value="published" '+(item.status==='published'?'selected':'')+'>Published</option><option value="archived" '+(item.status==='archived'?'selected':'')+'>Archived</option></select></div></div><div class="wide"><div class="field"><label>Description</label><textarea class="textarea" name="description">'+esc(item.description||'')+'</textarea></div></div><div class="wide inline-actions"><button type="button" class="btn btn-quiet" onclick="closeModal()">Cancel</button><button class="btn btn-primary">Save content</button></div></form>';
