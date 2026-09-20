@@ -296,90 +296,53 @@ function normalizeLessonForm(f){const b=Object.fromEntries(new FormData(f));b.re
 async function deleteLessonAdmin(id){if(!confirm('Delete this lesson?'))return;try{await api(`/api/admin/lesson/${id}`,{method:'DELETE',body:'{}'});await window.__builderRefresh?.();toast('Lesson deleted.')}catch(e){toast(e.message)}}
 
 async function adminContent(c){
-  const [courses,assets]=await Promise.all([api('/api/admin/courses'),api('/api/admin/assets')]);
-  const courseOptions='<option value="">No course association</option>'+(
-    courses.courses.length
-      ? courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
-      : '<option value="" disabled>No courses created yet</option>'
-  );
-  const scormOptions='<option value="">Auto-create course from SCORM title</option>'+(courses.courses.length?courses.courses.map(co=>'<option value="'+esc(co.id)+'">Use existing: '+esc(co.title)+' · '+esc(co.status)+'</option>').join(''):'');
-  const courseHelp=courses.courses.length
-    ? '<div class="help" style="margin-top:7px">Course association is optional for general files. Use Courses → New course when a file belongs to a specific learning path.</div>'
-    : '<div class="callout" style="margin-top:10px"><b>No courses have been created yet.</b> General files can still be uploaded without a course. SCORM can create a new draft course automatically from its manifest title.</div>';
-  c.innerHTML=
-    '<div class="grid-2">'+
-      '<section class="panel"><div class="panel-head"><div><h3>Upload learning content</h3><p>PDFs, videos, audio, presentations, images and other lesson assets are stored in free Cloudflare KV.</p></div><span class="tag">Up to 500 MB</span></div>'+
-        '<div class="upload-drop"><strong>Select a file to upload</strong><span>Files up to 25 MiB upload directly. Larger files are sent safely in smaller chunks.</span>'+
-          '<input id="asset-file" type="file" style="margin-top:14px;max-width:100%">'+
-          '<select id="asset-course" class="select" style="margin-top:12px">'+courseOptions+'</select>'+
-          '<select id="asset-kind" class="select" style="margin-top:10px"><option value="general">General</option><option value="lesson">Lesson asset</option><option value="course-cover">Course cover</option><option value="certificate-background">Certificate background</option></select>'+
-          courseHelp+
-          '<div id="asset-upload-status" class="help" style="margin-top:10px"></div>'+
-          '<button id="asset-upload" class="btn btn-primary" style="margin-top:12px">Upload file</button>'+
-        '</div>'+
-      '</section>'+
-      '<section class="panel"><div class="panel-head"><div><h3>Import SCORM</h3><p>SCORM 1.2 / 2004 packages are inspected, unpacked and launched inside the LMS runtime.</p></div></div>'+
-        '<div class="field"><label>Course</label><select id="scorm-course" class="select">'+scormOptions+'</select><div class="help" style="margin-top:6px">Leave this on Auto-create and the SCORM manifest title becomes a new draft course.</div></div>'+
-        ''+
-        '<div class="field" style="margin-top:10px"><label>Module (optional)</label><select id="scorm-module" class="select"><option value="">Create an Interactive Modules section automatically</option></select></div>'+
-        '<div class="field" style="margin-top:10px"><label>SCORM ZIP</label><input id="scorm-file" class="input" type="file" accept=".zip,application/zip"></div>'+
-        '<div id="scorm-upload-status" class="help" style="margin-top:9px">SCORM packages are limited to 25 MiB because the edge parser needs the package in memory.</div>'+
-        '<button id="scorm-upload" class="btn btn-primary" style="margin-top:12px">Import SCORM package</button>'+
-      '</section>'+
-    '</div>'+
-    '<section class="section panel"><div class="panel-head"><div><h3>Stored assets</h3><p>'+assets.assets.length+' files currently stored in Cloudflare KV.</p></div></div>'+
-      '<div class="table-wrap"><table class="table"><thead><tr><th>File</th><th>Kind</th><th>Size</th><th>Course</th><th></th></tr></thead><tbody>'+
-        (assets.assets.map(a=>'<tr><td><b>'+esc(a.filename)+'</b><div class="muted tiny mono">'+esc(a.id)+'</div></td><td>'+esc(a.kind)+'</td><td>'+bytes(a.size_bytes)+'</td><td>'+esc(a.course_id||'—')+'</td><td><button class="btn btn-danger btn-small asset-delete" data-id="'+encodeURIComponent(a.id)+'">Delete</button></td></tr>').join('')||'<tr><td colspan="5">No assets</td></tr>')+
-      '</tbody></table></div></section>';
-
-  const status=$('#asset-upload-status');
-  $('.asset-delete').forEach(btn=>btn.onclick=()=>removeAsset(btn.dataset.id));
-
-  $('#asset-upload').onclick=async()=>{
-    const file=$('#asset-file').files[0],courseId=$('#asset-course').value||'',kind=$('#asset-kind').value||'general';
-    if(!file)return toast('Choose a file.');
-    const status=$('#asset-upload-status'),button=$('#asset-upload');
-    button.disabled=true;
-    status.innerHTML='<span class="upload-state">Preparing upload… <b>0%</b></span><div class="upload-progress"><i style="width:0%"></i></div>';
-    const update=(pct,part,total)=>{
-      status.innerHTML='<span class="upload-state">'+(total?('Uploading part '+part+' of '+total):'Uploading')+'… <b>'+pct+'%</b></span><div class="upload-progress"><i style="width:'+pct+'%"></i></div>';
-    };
+  const d=await api('/api/admin/assets');
+  const items=(d.assets||[]).filter(x=>!['course-cover','certificate-background'].includes(x.kind));
+  c.innerHTML='<div class="section-head"><div><span class="tag">CONTENT LIBRARY</span><h2 style="font-size:34px;margin-top:10px">Learning content</h2><p>Upload once, publish it, then reuse the same content in courses.</p></div><button class="btn btn-primary" id="content-upload-open">+ Upload content</button></div>'+
+    '<div class="toolbar"><div class="toolbar-left"><input id="content-search" class="input search" placeholder="Search content"></div><div class="toolbar-right"><select id="content-status" class="select"><option value="">All statuses</option><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></div></div>'+
+    '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Content</th><th>Type</th><th>Duration</th><th>Size</th><th>Status</th><th>Used in</th><th>Actions</th></tr></thead><tbody id="content-rows">'+
+    (items.length?items.map(x=>'<tr data-search="'+esc((x.title||x.filename)+' '+x.kind).toLowerCase()+'"><td><b>'+esc(x.title||x.filename)+'</b><div class="muted tiny">'+esc(x.filename)+'</div></td><td>'+esc(x.kind==='pdf'?'Read':x.kind==='scorm'?'SCORM':x.kind)+'</td><td>'+Number(x.duration_minutes||0)+' min</td><td>'+bytes(x.size_bytes)+'</td><td><span class="pill '+esc(x.status||'draft')+'">'+esc(x.status||'draft')+'</span></td><td>'+Number(x.usage_courses||0)+'</td><td><div class="inline-actions"><button type="button" class="btn btn-quiet btn-small content-edit" data-id="'+encodeURIComponent(x.id)+'">Edit</button>'+(x.status==='published'?'<button type="button" class="btn btn-danger btn-small content-publish" data-id="'+encodeURIComponent(x.id)+'" data-status="draft">Unpublish</button>':'<button type="button" class="btn btn-good btn-small content-publish" data-id="'+encodeURIComponent(x.id)+'" data-status="published">Publish</button>')+'</div></td></tr>').join(''):'<tr><td colspan="7">No content yet. Upload a video, PDF, audio file, presentation or SCORM package.</td></tr>')+
+    '</tbody></table></div></section>';
+  $('#content-upload-open').onclick=()=>openContentUpload();
+  $$('.content-edit',c).forEach(btn=>btn.onclick=()=>editContent(btn.dataset.id));
+  $$('.content-publish',c).forEach(btn=>btn.onclick=()=>publishContent(btn.dataset.id,btn.dataset.status));
+  $('#content-search',c).oninput=filterContent;$('#content-status',c).onchange=filterContent;
+}
+function filterContent(){
+  const q=($('#content-search')?.value||'').toLowerCase(),status=($('#content-status')?.value||'').toLowerCase();
+  $$('#content-rows tr').forEach(row=>{const txt=(row.dataset.search||row.textContent||'').toLowerCase(),state=(row.querySelector('.pill')?.textContent||'').toLowerCase();row.classList.toggle('hidden',!!(q&&!txt.includes(q))||!!(status&&state!==status))});
+}
+function openContentUpload(){
+  const html='<form id="content-upload-form" class="form-grid"><div class="wide"><div class="field"><label>Content type</label><select class="select" name="type"><option value="video">Video</option><option value="read">Read / PDF</option><option value="audio">Audio</option><option value="presentation">Presentation</option><option value="other">Other file</option><option value="scorm">SCORM 1.2 / 2004</option></select></div></div><div class="wide"><div class="field"><label>File</label><input class="input" name="file" type="file" required></div></div><div><div class="field"><label>Title</label><input class="input" name="title" placeholder="Learner-facing title"></div></div><div><div class="field"><label>Duration (minutes)</label><input class="input" name="duration" type="number" min="0" value="0"></div></div><div class="wide"><div class="field"><label>Description</label><textarea class="textarea" name="description"></textarea></div></div><div><div class="field"><label>Status</label><select class="select" name="status"><option value="draft">Draft</option><option value="published">Published</option></select></div></div><div class="wide" id="content-upload-status"></div><div class="wide inline-actions"><button type="button" class="btn btn-quiet" onclick="closeModal()">Cancel</button><button class="btn btn-primary">Upload content</button></div></form>';
+  modal('Upload learning content',html,async e=>{
+    const form=e.currentTarget,file=form.file.files[0],type=form.type.value,title=(form.title.value||file?.name||'').trim(),description=form.description.value||'',duration=Number(form.duration.value||0),status=form.status.value,box=form.querySelector('#content-upload-status');
+    if(!file){toast('Choose a file.');return}
+    const show=(label,pct)=>{box.innerHTML='<div class="upload-state">'+esc(label)+' <b>'+pct+'%</b></div><div class="upload-progress"><i style="width:'+pct+'%"></i></div>'};
     try{
-      await uploadAssetFile(file,courseId,kind,update);
-      status.innerHTML='<span class="upload-success">Upload complete ✓</span><div class="upload-progress"><i style="width:100%"></i></div>';
-      toast('Uploaded '+file.name);
-      $('#asset-file').value='';
-      await adminContent(c);
-    }catch(e){
-      status.innerHTML='<span class="upload-failed">Upload failed: '+esc(e.message)+'</span><div class="upload-progress"><i style="width:0%"></i></div>';
-      toast(e.message);
-    }finally{button.disabled=false}
-  };
-  $('#scorm-course').onchange=async()=>{
-    const courseId=$('#scorm-course').value;
-    if(!courseId){$('#scorm-module').innerHTML='<option value="">Choose a course first</option>';return}
-    const d=await api('/api/admin/course/'+encodeURIComponent(courseId));
-    $('#scorm-module').innerHTML='<option value="">Auto-create Interactive Modules</option>'+d.modules.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.title)+'</option>').join('')
-  };
-  $('#scorm-upload').onclick=async()=>{
-    const file=$('#scorm-file').files[0],courseId=$('#scorm-course').value;
-    if(!file)return toast('Choose a SCORM ZIP first');
-    if(file.size>25*1024*1024)return toast('SCORM ZIP is limited to 25 MiB in free storage mode.');
-    const button=$('#scorm-upload'),status=$('#scorm-upload-status');button.disabled=true;
-    status.innerHTML='<span class="upload-state">Reading SCORM package… <b>0%</b></span><div class="upload-progress"><i style="width:0%"></i></div>';
-    try{
-      const url='/api/admin/scorm/upload?'+(courseId?'courseId='+encodeURIComponent(courseId)+'&':'')+'moduleId='+encodeURIComponent($('#scorm-module').value)+'&filename='+encodeURIComponent(file.name);
-      const r=await xhrUpload(url,file,(pct)=>{
-        status.innerHTML='<span class="upload-state">Uploading & importing SCORM… <b>'+pct+'%</b></span><div class="upload-progress"><i style="width:'+pct+'%"></i></div>';
-      });
-      status.innerHTML='<span class="upload-success">'+(r.autoCreatedCourse?'SCORM imported and draft course created ✓':'SCORM imported ✓')+'</span><div class="upload-progress"><i style="width:100%"></i></div>';
-      toast(r.autoCreatedCourse?'SCORM imported and draft course created.':'SCORM imported into course.');
-      await adminContent(c);
-    }catch(e){
-      status.innerHTML='<span class="upload-failed">SCORM import failed: '+esc(e.message)+'</span><div class="upload-progress"><i style="width:0%"></i></div>';
-      toast(e.message);
-    }finally{button.disabled=false}
-  };
+      if(type==='scorm'){
+        if(file.size>25*1024*1024)throw new Error('SCORM ZIP is limited to 25 MiB in free storage mode.');
+        show('Uploading SCORM',0);
+        const r=await xhrUpload('/api/admin/scorm/upload?filename='+encodeURIComponent(file.name),file,p=>show('Uploading SCORM',p));
+        if(!r.package?.assetId)throw new Error('SCORM package was uploaded but no content item was returned.');
+        show('SCORM extracted and indexed',100);
+        await api('/api/admin/asset/'+encodeURIComponent(r.package.assetId),{method:'PATCH',body:JSON.stringify({title:r.package.title||title,description,duration,status})});
+        box.innerHTML='<div class="upload-success">SCORM extracted and saved ✓ '+Number(r.package.fileCount||0)+' files indexed.</div>';
+      }else{
+        const kind={video:'video',read:'pdf',audio:'audio',presentation:'presentation',other:'general'}[type]||'general';
+        show('Uploading',0);
+        const r=await uploadAssetFile(file,null,kind,(pct)=>show('Uploading',pct));
+        await api('/api/admin/asset/'+encodeURIComponent(r.asset.id),{method:'PATCH',body:JSON.stringify({title,description,duration,status})});
+        box.innerHTML='<div class="upload-success">Content saved to library ✓</div>';
+      }
+      toast('Content saved to the Content Library.');
+      setTimeout(()=>{closeModal();adminContent(document.getElementById('admin-content'))},400);
+    }catch(err){box.innerHTML='<div class="upload-failed">Upload failed: '+esc(err.message)+'</div>';toast(err.message)}
+  });
+}
+async function editContent(id){
+  const d=await api('/api/admin/assets'),item=(d.assets||[]).find(x=>x.id===id);if(!item)return;
+  const html='<form id="modal-form" class="form-grid"><div class="wide"><div class="field"><label>Title</label><input class="input" name="title" value="'+esc(item.title||item.filename)+'" required></div></div><div><div class="field"><label>Duration (minutes)</label><input class="input" name="duration" type="number" min="0" value="'+Number(item.duration_minutes||0)+'"></div></div><div><div class="field"><label>Status</label><select class="select" name="status"><option value="draft" '+(item.status==='draft'?'selected':'')+'>Draft</option><option value="published" '+(item.status==='published'?'selected':'')+'>Published</option><option value="archived" '+(item.status==='archived'?'selected':'')+'>Archived</option></select></div></div><div class="wide"><div class="field"><label>Description</label><textarea class="textarea" name="description">'+esc(item.description||'')+'</textarea></div></div><div class="wide inline-actions"><button type="button" class="btn btn-quiet" onclick="closeModal()">Cancel</button><button class="btn btn-primary">Save content</button></div></form>';
+  modal('Edit content',html,async e=>{try{const v=Object.fromEntries(new FormData(e.currentTarget));await api('/api/admin/asset/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({title:v.title,description:v.description,duration:Number(v.duration||0),status:v.status})});closeModal();toast('Content updated.');await adminContent(document.getElementById('admin-content'))}catch(err){toast(err.message)}});
 }
 async function removeAsset(id){if(!confirm('Delete this stored asset?'))return;try{await api(`/api/admin/asset/${id}`,{method:'DELETE',body:'{}'});toast('Asset deleted.');nav('admin',{tab:'content'})}catch(e){toast(e.message)}}
 
