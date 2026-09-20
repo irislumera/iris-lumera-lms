@@ -3,7 +3,7 @@ import { audit, awardXP, checkCsrf, clearSessionCookie, createSession, currentSe
 import { issueCertificate, renderCertificateHtml } from './certificates.js';
 import { commitRegistration, getRegistration, inspectManifest, persistScormPackage, playerHtml } from './scorm.js';
 import { learningReport } from './reporting.js';
-import { sendWelcomeEmail, sendCourseAssignedEmail, sendCourseCompletedEmail } from './email.js';
+import { sendWelcomeEmail, sendCourseAssignedEmail, sendCourseCompletedEmail, sendVerificationCodeEmail } from './email.js';
 
 const MAX_ASSET_BYTES=500*1024*1024;
 const KV_VALUE_BYTES=25*1024*1024;
@@ -18,6 +18,7 @@ const FALLBACK_MIME={
 };
 function ext(name){const n=String(name||'').toLowerCase();const i=n.lastIndexOf('.');return i>=0?n.slice(i):''}
 function mimeFor(name,header=''){return header&&header!=='application/octet-stream'?header:(FALLBACK_MIME[ext(name)]||'application/octet-stream')}
+function verificationCode(){return String(crypto.getRandomValues(new Uint32Array(1))[0]%1000000).padStart(6,'0')}
 function cleanName(name='upload.bin'){return String(name).split(/[\\/]/).pop().replace(/[^a-zA-Z0-9._-]/g,'_')||'upload.bin'}
 function bodyJson(request){return request.json().catch(()=>({}));}
 function route(path){return (path.replace(/\/+$|^\/$/g,'').replace(/^\//,'').split('/').filter(Boolean));}
@@ -27,6 +28,7 @@ async function login(env,request){
   if(!email||!password)return json({error:'Email and password are required'},400);
   const user=await env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first();
   if(!user||user.status!=='active')return json({error:'Invalid credentials or inactive account'},401);
+  if(user.role==='learner'&&Number(user.email_verified||0)!==1)return json({error:'Please verify your email before signing in.',requiresVerification:true,email:user.email},403);
   const pass=await derivePassword(password,user.password_salt);if(pass.hash!==user.password_hash)return json({error:'Invalid credentials'},401);
   const firstLearnerLogin=user.role==='learner'&&!user.last_login_at;
   const session=await createSession(env,user.id);await env.DB.prepare('UPDATE users SET last_login_at=?,updated_at=? WHERE id=?').bind(now(),now(),user.id).run();
@@ -45,10 +47,36 @@ async function register(env,request){
   if(!email||!firstName||!lastName||password.length<10)return json({error:'First name, last name, email and a 10+ character password are required'},400);
   if(await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first())return json({error:'An account with that email already exists'},409);
   if(employeeId&&await env.DB.prepare('SELECT id FROM users WHERE employee_id=?').bind(employeeId).first())return json({error:'Employee ID already exists'},409);
-  const pass=await derivePassword(password),id=randomId(),t=now();
-  await env.DB.prepare(`INSERT INTO users(id,email,password_hash,password_salt,first_name,last_name,employee_id,department,job_title,role,status,must_change_password,xp,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'learner','active',0,0,?,?)`).bind(id,email,pass.hash,pass.salt,firstName,lastName,employeeId,department,jobTitle,t,t).run();
+  const pass=await derivePassword(password),id=randomId(),t=now(),code=verificationCode(),codeHash=await sha256(code),expires=new Date(Date.now()+15*60*1000).toISOString();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,password_salt,first_name,last_name,employee_id,department,job_title,role,status,must_change_password,xp,created_at,updated_at,email_verified,verification_code_hash,verification_expires_at,verification_attempts) VALUES(?,?,?,?,?,?,?,?,?,'learner','active',0,0,?,?,?,?,?)").bind(id,email,pass.hash,pass.salt,firstName,lastName,employeeId,department,jobTitle,t,t,0,codeHash,expires,0).run();
   await audit(env,null,'learner.self_registered','user',id,{email,employeeId,department,jobTitle});
-  return json({ok:true,user:{id,email,firstName,lastName,employeeId,department,jobTitle,role:'learner',status:'active',mustChangePassword:false,xp:0}});
+  try{const mail=await sendVerificationCodeEmail(env,{email,first_name:firstName},code);return json({ok:true,requiresVerification:true,emailSent:Boolean(mail.sent),email});}
+  catch(error){console.error('verification_email_failed',error);return json({ok:true,requiresVerification:true,emailSent:false,email});}
+}
+async function verifyRegistration(env,request){
+  const b=await bodyJson(request),email=String(b.email||'').trim().toLowerCase(),code=String(b.code||'').trim();
+  if(!email||!/^[0-9]{6}$/.test(code))return json({error:'Enter the six-digit verification code'},400);
+  const user=await env.DB.prepare('SELECT id,email,role,status,email_verified,verification_code_hash,verification_expires_at,verification_attempts FROM users WHERE email=?').bind(email).first();
+  if(!user||user.role!=='learner')return json({error:'Verification account not found'},404);
+  if(Number(user.email_verified)===1)return json({ok:true,verified:true});
+  if(Number(user.verification_attempts||0)>=5)return json({error:'Too many verification attempts. Request a new code.'},429);
+  if(!user.verification_expires_at||new Date(user.verification_expires_at).getTime()<Date.now())return json({error:'Verification code has expired. Request a new code.'},400);
+  const hash=await sha256(code);
+  if(hash!==user.verification_code_hash){await env.DB.prepare('UPDATE users SET verification_attempts=verification_attempts+1,updated_at=? WHERE id=?').bind(now(),user.id).run();return json({error:'Incorrect verification code'},400);}
+  await env.DB.prepare("UPDATE users SET email_verified=1,verification_code_hash=NULL,verification_expires_at=NULL,verification_attempts=0,status='active',updated_at=? WHERE id=?").bind(now(),user.id).run();
+  await audit(env,null,'learner.email_verified','user',user.id,{email});
+  return json({ok:true,verified:true});
+}
+async function resendVerificationCode(env,request){
+  const b=await bodyJson(request),email=String(b.email||'').trim().toLowerCase();
+  if(!email)return json({error:'Email is required'},400);
+  const user=await env.DB.prepare('SELECT id,email,first_name,last_name,role,email_verified FROM users WHERE email=?').bind(email).first();
+  if(!user||user.role!=='learner')return json({error:'Verification account not found'},404);
+  if(Number(user.email_verified)===1)return json({ok:true,verified:true});
+  const code=verificationCode(),hash=await sha256(code),expires=new Date(Date.now()+15*60*1000).toISOString();
+  await env.DB.prepare('UPDATE users SET verification_code_hash=?,verification_expires_at=?,verification_attempts=0,updated_at=? WHERE id=?').bind(hash,expires,now(),user.id).run();
+  try{const mail=await sendVerificationCodeEmail(env,user,code);return json({ok:true,emailSent:Boolean(mail.sent),email});}
+  catch(error){console.error('verification_email_failed',error);return json({ok:true,emailSent:false,email});}
 }
 async function logout(env,request){const s=await currentSession(env,request);if(s)await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(s.session_id).run();return json({ok:true},200,{'Set-Cookie':clearSessionCookie()});}
 async function me(env,request){const s=await currentSession(env,request);if(!s)return json({authenticated:false});return json({authenticated:true,user:safeUser(s),csrfToken:s.csrf_token});}
@@ -163,6 +191,31 @@ async function courseDetail(env,request,id,admin=false){
   if(!admin){const s=await requireUser(env,request);if(!(await env.DB.prepare("SELECT id FROM enrollments WHERE user_id=? AND course_id=? AND status IN ('active','completed')").bind(s.id,c.id).first()))return json({error:'Enrollment required'},403);}
   const mods=await env.DB.prepare('SELECT * FROM modules WHERE course_id=? ORDER BY position').bind(id).all();const modules=[];for(const m of mods.results||[]){const ls=await env.DB.prepare(`SELECT l.*,lp.completed,lp.score,sp.title scorm_title FROM lessons l LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.user_id=? LEFT JOIN scorm_packages sp ON sp.id=l.scorm_package_id WHERE l.module_id=? ORDER BY l.position`).bind(admin?'':(await currentSession(env,request))?.user_id||'',m.id).all();modules.push({...m,lessons:ls.results||[]});}return json({course:c,modules});
 }
+async function attachCourseContent(env,request,courseId){
+  const s=await authCsrf(env,request,'admin');
+  const course=await env.DB.prepare('SELECT id FROM courses WHERE id=?').bind(courseId).first();
+  if(!course)return json({error:'Course not found'},404);
+  const b=await bodyJson(request),ids=Array.isArray(b.contentIds)?b.contentIds.map(String).filter(Boolean):[];
+  let module=await env.DB.prepare('SELECT * FROM modules WHERE course_id=? ORDER BY position LIMIT 1').bind(courseId).first();
+  if(!module){const mid=randomId();await env.DB.prepare('INSERT INTO modules(id,course_id,title,description,position,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(mid,courseId,'Course Content','Published learning content',1,40,now(),now()).run();module={id:mid};}
+  let added=0;
+  for(const assetId of ids){
+    const asset=await env.DB.prepare("SELECT * FROM assets WHERE id=? AND status='published'").bind(assetId).first();
+    if(!asset)continue;
+    if(await env.DB.prepare('SELECT id FROM lessons WHERE module_id=? AND asset_id=? LIMIT 1').bind(module.id,assetId).first())continue;
+    let type='pdf',scormPackageId=null;
+    if(asset.kind==='video'||String(asset.mime_type||'').startsWith('video/'))type='video';
+    else if(asset.kind==='audio'||String(asset.mime_type||'').startsWith('audio/'))type='audio';
+    else if(asset.kind==='presentation')type='presentation';
+    else if(asset.kind==='scorm'){type='scorm';scormPackageId=(await env.DB.prepare('SELECT id FROM scorm_packages WHERE asset_id=? LIMIT 1').bind(assetId).first())?.id||null;}
+    else if(asset.kind==='text'||asset.mime_type==='text/plain')type='text';
+    const position=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM lessons WHERE module_id=?').bind(module.id).first())?.p||1);
+    await env.DB.prepare('INSERT INTO lessons(id,module_id,title,type,body,asset_id,external_url,quiz_id,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(randomId(),module.id,asset.title||asset.filename,type,'',assetId,null,null,scormPackageId,Number(asset.duration_minutes||0),position,1,20,now(),now()).run();
+    added++;
+  }
+  await audit(env,s.id,'course.content_attached','course',courseId,{contentIds:ids,added});
+  return json({ok:true,added});
+}
 async function saveModule(env,request,courseId,id=null){const s=await authCsrf(env,request,'admin');if(id&&!courseId){courseId=(await env.DB.prepare('SELECT course_id FROM modules WHERE id=?').bind(id).first())?.course_id;}const b=await bodyJson(request);const title=String(b.title||'').trim();if(!title)return json({error:'Module title is required'},400);const position=Math.max(1,Number(b.position||1)),xp=Math.max(0,Number(b.xpReward||40));if(id){await env.DB.prepare('UPDATE modules SET title=?,description=?,position=?,xp_reward=?,updated_at=? WHERE id=? AND course_id=?').bind(title,String(b.description||''),position,xp,now(),id,courseId).run();await audit(env,s.id,'module.updated','module',id,{courseId});return json({ok:true,id});}const mid=randomId();await env.DB.prepare('INSERT INTO modules(id,course_id,title,description,position,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(mid,courseId,title,String(b.description||''),position,xp,now(),now()).run();await audit(env,s.id,'module.created','module',mid,{courseId});return json({ok:true,id:mid},201);}
 async function deleteModule(env,request,id){const s=await authCsrf(env,request,'admin');const row=await env.DB.prepare('SELECT course_id FROM modules WHERE id=?').bind(id).first();if(!row)return json({error:'Module not found'},404);await env.DB.prepare('DELETE FROM modules WHERE id=?').bind(id).run();await audit(env,s.id,'module.deleted','module',id,{});return json({ok:true});}
 async function saveLesson(env,request,moduleId,id=null){const s=await authCsrf(env,request,'admin');if(id&&!moduleId){moduleId=(await env.DB.prepare('SELECT module_id FROM lessons WHERE id=?').bind(id).first())?.module_id;}const b=await bodyJson(request);const title=String(b.title||'').trim();if(!title)return json({error:'Lesson title is required'},400);const type=['text','video','audio','pdf','presentation','external','quiz','scorm'].includes(b.type)?b.type:'text';const vals=[title,type,String(b.body||''),b.assetId||null,b.externalUrl||null,b.quizId||null,b.scormPackageId||null,Math.max(1,Number(b.durationMinutes||10)),Math.max(1,Number(b.position||1)),b.required===false?0:1,Math.max(0,Number(b.xpReward||20))];if(id){await env.DB.prepare('UPDATE lessons SET title=?,type=?,body=?,asset_id=?,external_url=?,quiz_id=?,scorm_package_id=?,duration_minutes=?,position=?,is_required=?,xp_reward=?,updated_at=? WHERE id=? AND module_id=?').bind(...vals,now(),id,moduleId).run();await audit(env,s.id,'lesson.updated','lesson',id,{moduleId});return json({ok:true,id});}const lid=randomId();await env.DB.prepare(`INSERT INTO lessons(id,module_id,title,type,body,asset_id,external_url,quiz_id,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(lid,moduleId,...vals,now(),now()).run();await audit(env,s.id,'lesson.created','lesson',lid,{moduleId});return json({ok:true,id:lid},201);}
@@ -218,11 +271,24 @@ async function assets(env,request){
     if(size>KV_VALUE_BYTES)return json({error:'Files above 25 MiB must use the chunked upload flow'},413);
     const id=randomId(),key=`uploads/${new Date().toISOString().slice(0,10)}/${id}-${filename}`,mime=mimeFor(filename,request.headers.get('Content-Type')||'');
     await env.CONTENT.put(key,bytes,{metadata:{contentType:mime}});
-    await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,courseId,key,filename,mime,size,kind,s.id,now()).run();
+    await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at,title,description,status,duration_minutes,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,courseId,key,filename,mime,size,kind,s.id,now(),String(url.searchParams.get('title')||filename),String(url.searchParams.get('description')||''),String(url.searchParams.get('status')||'draft')==='published'?'published':'draft',Math.max(0,Number(url.searchParams.get('duration')||0)),String(url.searchParams.get('status')||'')==='published'?now():null).run();
     await audit(env,s.id,'asset.uploaded','asset',id,{filename,kind,size,courseId,storage:'kv'});
     return json({ok:true,asset:{id,courseId,filename,mimeType:mime,sizeBytes:size,kind}},201);
   }
   return json({error:'Method not allowed'},405);
+}
+async function updateAsset(env,request,id){
+  const s=await authCsrf(env,request,'admin');
+  const asset=await env.DB.prepare('SELECT * FROM assets WHERE id=?').bind(id).first();
+  if(!asset)return json({error:'Asset not found'},404);
+  const b=await bodyJson(request);
+  const status=['draft','published','archived'].includes(b.status)?b.status:(asset.status||'draft');
+  const title=String(b.title??asset.title??asset.filename).trim()||asset.filename;
+  const description=String(b.description??asset.description??'');
+  const duration=Math.max(0,Number(b.duration??asset.duration_minutes??0));
+  await env.DB.prepare("UPDATE assets SET title=?,description=?,status=?,duration_minutes=?,published_at=CASE WHEN ?='published' THEN COALESCE(published_at,?) ELSE published_at END WHERE id=?").bind(title,description,status,duration,status,now(),id).run();
+  await audit(env,s.id,'asset.updated','asset',id,{title,status,duration});
+  return json({ok:true,status,title,description,duration});
 }
 async function assetUploadStart(env,request){
   const s=await authCsrf(env,request,'admin');
@@ -457,6 +523,8 @@ async function api(env,request){
   try{
     if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='login'&&request.method==='POST')return login(env,request);
     if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='register'&&request.method==='POST')return register(env,request);
+    if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='verify'&&request.method==='POST')return verifyRegistration(env,request);
+    if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='resend-verification'&&request.method==='POST')return resendVerificationCode(env,request);
     if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='logout'&&request.method==='POST')return logout(env,request);
     if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='me'&&request.method==='GET')return me(env,request);
     if(parts[0]==='api'&&parts[1]==='setup'&&request.method==='POST')return setup(env,request);
@@ -478,6 +546,7 @@ async function api(env,request){
       if(a==='course'&&parts[3]&&parts[4]==='modules'&&request.method==='POST')return saveModule(env,request,parts[3],null);
       if(a==='course'&&parts[3]&&request.method==='GET')return courseDetail(env,request,parts[3],true);
       if(a==='course'&&parts[3]&&request.method==='POST')return saveCourse(env,request,parts[3]);
+      if(a==='course'&&parts[3]&&parts[4]==='content'&&request.method==='POST')return attachCourseContent(env,request,parts[3]);
       if(a==='module'&&parts[3]&&request.method==='PATCH')return saveModule(env,request,null,parts[3]);
       if(a==='module'&&parts[3]&&request.method==='DELETE')return deleteModule(env,request,parts[3]);
       if(a==='module'&&parts[3]&&parts[4]==='lessons'&&request.method==='POST')return saveLesson(env,request,parts[3],null);
@@ -489,6 +558,7 @@ async function api(env,request){
       if(a==='assets'&&parts[3]==='start'&&request.method==='POST')return assetUploadStart(env,request);
       if(a==='assets'&&parts[3]==='chunk'&&request.method==='POST')return assetUploadChunk(env,request);
       if(a==='assets'&&parts[3]==='finalize'&&request.method==='POST')return assetUploadFinalize(env,request);
+      if(a==='asset'&&parts[3]&&request.method==='PATCH')return updateAsset(env,request,parts[3]);
       if(a==='assets'&&request.method==='GET')return assets(env,request);
       if(a==='assets'&&request.method==='POST')return assets(env,request);
       if(a==='asset'&&parts[3]&&request.method==='DELETE')return deleteAsset(env,request,parts[3]);
