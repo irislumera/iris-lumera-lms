@@ -230,7 +230,7 @@ async function adminContent(c){
   const scormOptions='<option value="">Auto-create course from SCORM title</option>'+(courses.courses.length?courses.courses.map(co=>'<option value="'+esc(co.id)+'">Use existing: '+esc(co.title)+' · '+esc(co.status)+'</option>').join(''):'');
   const courseHelp=courses.courses.length
     ? '<div class="help" style="margin-top:7px">Course association is optional for general files. Use Courses → New course when a file belongs to a specific learning path.</div>'
-    : '<div class="callout" style="margin-top:10px"><b>No courses have been created yet.</b> General files can still be uploaded without a course. For SCORM, create a course first.</div>';
+    : '<div class="callout" style="margin-top:10px"><b>No courses have been created yet.</b> General files can still be uploaded without a course. SCORM can create a new draft course automatically from its manifest title.</div>';
   c.innerHTML=
     '<div class="grid-2">'+
       '<section class="panel"><div class="panel-head"><div><h3>Upload learning content</h3><p>PDFs, videos, audio, presentations, images and other lesson assets are stored in free Cloudflare KV.</p></div><span class="tag">Up to 500 MB</span></div>'+
@@ -245,7 +245,7 @@ async function adminContent(c){
       '</section>'+
       '<section class="panel"><div class="panel-head"><div><h3>Import SCORM</h3><p>SCORM 1.2 / 2004 packages are inspected, unpacked and launched inside the LMS runtime.</p></div></div>'+
         '<div class="field"><label>Course</label><select id="scorm-course" class="select">'+scormOptions+'</select><div class="help" style="margin-top:6px">Leave this on Auto-create and the SCORM manifest title becomes a new draft course.</div></div>'+
-        '<button id="create-course-from-content" class="btn btn-quiet btn-small" style="margin-top:9px" type="button">Create course</button>'+
+        ''+
         '<div class="field" style="margin-top:10px"><label>Module (optional)</label><select id="scorm-module" class="select"><option value="">Create an Interactive Modules section automatically</option></select></div>'+
         '<div class="field" style="margin-top:10px"><label>SCORM ZIP</label><input id="scorm-file" class="input" type="file" accept=".zip,application/zip"></div>'+
         '<div id="scorm-upload-status" class="help" style="margin-top:9px">SCORM packages are limited to 25 MiB because the edge parser needs the package in memory.</div>'+
@@ -260,7 +260,6 @@ async function adminContent(c){
   const status=$('#asset-upload-status');
   $('.asset-delete').forEach(btn=>btn.onclick=()=>removeAsset(btn.dataset.id));
 
-  $('#create-course-from-content').onclick=()=>nav('admin',{tab:'courses'});
   $('#asset-upload').onclick=async()=>{
     const file=$('#asset-file').files[0];
     const courseId=$('#asset-course').value||'';
