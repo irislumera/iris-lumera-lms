@@ -87,7 +87,7 @@
   async function renderReports(panel){
     if(!panel||bound.has(panel))return;
     bound.add(panel);style();
-    panel.innerHTML='<div class="panel-head"><div><h3>Learning report & exports</h3><p>One row per learner-course assignment with email, course, dates, due date, completion status and progress.</p></div><div class="iris-actions"><a id="iris-report-csv" class="btn btn-primary" target="_blank" rel="noopener">Download CSV</a><button id="iris-report-reset" class="btn btn-quiet">Reset filters</button></div></div>'+
+    panel.innerHTML='<div class="panel-head"><div><h3>Learning report & exports</h3><p>One row per learner-course assignment with email, course, dates, due date, completion status and progress.</p></div><div class="iris-actions"><button id="iris-report-csv" class="btn btn-primary">Download CSV</button><button id="iris-report-reset" class="btn btn-quiet">Reset filters</button></div></div>'+
       '<div class="iris-tools"><input id="iris-report-search" class="input search" placeholder="Search learner, email, employee ID or course"><select id="iris-report-course" class="select"><option value="">All courses</option></select><select id="iris-report-status" class="select"><option value="">All completion statuses</option><option>Completed</option><option>Started</option><option>Pending</option><option>Not Started</option><option>Overdue</option><option>Revoked</option></select><select id="iris-report-learner-status" class="select"><option value="">All learner accounts</option><option value="active">Active learners</option><option value="inactive">Inactive learners</option></select><input id="iris-report-department" class="input" placeholder="Department"></div>'+
       '<div class="iris-tools"><select id="iris-report-date-field" class="select"><option value="">Date filter</option><option value="enrolled">Enrollment date</option><option value="due">Due date</option><option value="completed">Completion date</option></select><input id="iris-report-date-from" class="input" type="date" aria-label="Date from"><input id="iris-report-date-to" class="input" type="date" aria-label="Date to"></div>'+
       '<div id="iris-report-summary" class="iris-summary"></div><p class="iris-note"><b>Status:</b> Completed = course completed. Started = learner has started but is not complete. Pending = assigned with a due date and not started. Not Started = assigned with no recorded start and no due date. Overdue = due date passed and incomplete. Revoked = access removed.</p>'+
@@ -107,7 +107,7 @@
           const cls=x.completion_status==='Completed'?'completed':(x.completion_status==='Overdue'||x.completion_status==='Revoked'?'inactive':'published');
           return '<tr><td><b>'+esc((x.first_name||'')+' '+(x.last_name||''))+'</b><div class="muted tiny">'+esc(x.employee_id||'—')+'</div></td><td>'+esc(x.email)+'</td><td><b>'+esc(x.course_title)+'</b><div class="muted tiny">'+esc(x.category||'')+' · '+esc(x.level||'')+'</div></td><td>'+esc(x.department||'—')+'</td><td>'+dateTime(x.enrolled_at)+'</td><td>'+dateTime(x.started_at)+'</td><td>'+date(x.due_at)+'</td><td>'+dateTime(x.completed_at)+'</td><td><span class="pill '+cls+'">'+esc(x.completion_status)+'</span></td><td>'+Number(x.progress_pct||0)+'%</td><td>'+(x.certificate_id?'Issued':'—')+'</td><td>'+esc(x.learner_status)+'</td></tr>';
         }).join('')||'<tr><td colspan="12">No records match the selected filters.</td></tr>';
-        const csv=params();csv.set('format','csv');document.querySelector('#iris-report-csv').href='/api/admin/learning-report?'+csv.toString();
+        document.querySelector('#iris-report-csv').disabled=false;
       }catch(err){
         document.querySelector('#iris-report-rows').innerHTML='<tr><td colspan="12" class="danger-note">'+esc(err.message)+'</td></tr>';
       }
@@ -115,6 +115,17 @@
     let timer=0;
     ['iris-report-search','iris-report-department'].forEach(id=>document.getElementById(id).addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(load,300)}));
     ['iris-report-course','iris-report-status','iris-report-learner-status','iris-report-date-field','iris-report-date-from','iris-report-date-to'].forEach(id=>document.getElementById(id).addEventListener('change',load));
+    document.getElementById('iris-report-csv').onclick=async()=>{
+      const btn=document.getElementById('iris-report-csv');btn.disabled=true;const old=btn.textContent;btn.textContent='Preparing CSV…';
+      try{
+        const csv=params();csv.set('format','csv');
+        const r=await fetch('/api/admin/learning-report?'+csv.toString(),{credentials:'same-origin',headers:{Accept:'text/csv','X-CSRF-Token':window.CSRF||''}});
+        if(!r.ok){let j={};try{j=await r.json()}catch{}throw new Error(j.error||'CSV download failed ('+r.status+')')}
+        const blob=await r.blob();const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='iris-lumera-learning-report-'+new Date().toISOString().slice(0,10)+'.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        btn.textContent='CSV downloaded ✓';setTimeout(()=>btn.textContent=old,1800);
+      }catch(e){toast(e.message);btn.textContent='Download CSV'}
+      finally{btn.disabled=false}
+    };
     document.getElementById('iris-report-reset').onclick=()=>{
       ['iris-report-search','iris-report-department','iris-report-date-from','iris-report-date-to'].forEach(id=>document.getElementById(id).value='');
       ['iris-report-course','iris-report-status','iris-report-learner-status','iris-report-date-field'].forEach(id=>document.getElementById(id).value='');
