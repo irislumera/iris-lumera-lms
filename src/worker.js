@@ -424,11 +424,11 @@ async function api(env,request){
       if(a==='enrollments'&&request.method==='GET')return enrollments(env,request);
       if(a==='enrollments'&&request.method==='POST')return enrollAdmin(env,request);
       if(a==='enrollment'&&parts[3]&&parts[4]==='status'&&request.method==='PATCH')return enrollmentStatus(env,request,parts[3]);
-      if(a==='assets'&&request.method==='GET')return assets(env,request);
-      if(a==='assets'&&request.method==='POST')return assets(env,request);
       if(a==='assets'&&parts[3]==='start'&&request.method==='POST')return assetUploadStart(env,request);
       if(a==='assets'&&parts[3]==='chunk'&&request.method==='POST')return assetUploadChunk(env,request);
       if(a==='assets'&&parts[3]==='finalize'&&request.method==='POST')return assetUploadFinalize(env,request);
+      if(a==='assets'&&request.method==='GET')return assets(env,request);
+      if(a==='assets'&&request.method==='POST')return assets(env,request);
       if(a==='asset'&&parts[3]&&request.method==='DELETE')return deleteAsset(env,request,parts[3]);
       if(a==='scorm'&&parts[3]==='upload'&&request.method==='POST')return scormUpload(env,request);
       if(a==='scorm'&&parts[3]==='packages'&&request.method==='GET')return scormPackages(env,request);
