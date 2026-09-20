@@ -26,6 +26,16 @@ async function sendTransactional(env,{to,name,subject,html,text}){
   const data=await response.json().catch(()=>({}));
   return {sent:true,messageId:data.messageId||null};
 }
+export async function sendVerificationCodeEmail(env,user,code){
+  const first=escEmail(user.first_name||user.firstName||'Learner');
+  return sendTransactional(env,{
+    to:user.email,
+    name:first,
+    subject:'Verify your IRIS LUMERA account',
+    html:'<!doctype html><html><body style="margin:0;background:#fff7f8;font-family:Arial,sans-serif;color:#321b23"><div style="max-width:620px;margin:0 auto;padding:30px 18px"><div style="background:linear-gradient(135deg,#fff0f3,#f7a6b4);padding:30px;border-radius:22px"><div style="font-weight:900;letter-spacing:.16em">IRIS LUMERA</div><h1 style="font-size:28px;margin:24px 0 10px">Verify your email</h1><p style="line-height:1.7">Hello '+first+', use the verification code below to finish creating your learner account.</p><div style="font-size:38px;letter-spacing:.35em;font-weight:900;background:#fff;padding:18px 20px;border-radius:16px;display:inline-block;margin:12px 0">'+escEmail(code)+'</div><p style="color:#7b5962;line-height:1.6">This code expires in 15 minutes. If you did not create this account, you can ignore this message.</p><p style="font-size:12px;color:#7b5962;margin-top:24px">Need help? Contact <b>'+escEmail(env.SUPPORT_EMAIL||'irislumera@hotmail.com')+'</b>.</p></div></div></body></html>',
+    text:'Hello '+(user.first_name||'learner')+', your IRIS LUMERA verification code is '+code+'. It expires in 15 minutes. Need help? '+(env.SUPPORT_EMAIL||'irislumera@hotmail.com')
+  });
+}
 export async function sendWelcomeEmail(env,user){
   const first=escEmail(user.first_name||user.firstName||'Learner');
   const full=escEmail(((user.first_name||user.firstName||'')+' '+(user.last_name||user.lastName||'')).trim());
