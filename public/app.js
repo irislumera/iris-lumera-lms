@@ -165,10 +165,12 @@ async function adminContent(c){
     '</div>'+
     '<section class="section panel"><div class="panel-head"><div><h3>Stored assets</h3><p>'+assets.assets.length+' files currently stored in Cloudflare KV.</p></div></div>'+
       '<div class="table-wrap"><table class="table"><thead><tr><th>File</th><th>Kind</th><th>Size</th><th>Course</th><th></th></tr></thead><tbody>'+
-        (assets.assets.map(a=>'<tr><td><b>'+esc(a.filename)+'</b><div class="muted tiny mono">'+esc(a.id)+'</div></td><td>'+esc(a.kind)+'</td><td>'+bytes(a.size_bytes)+'</td><td>'+esc(a.course_id||'—')+'</td><td><button class="btn btn-danger btn-small" onclick="removeAsset(\\''+encodeURIComponent(a.id)+'\\')">Delete</button></td></tr>').join('')||'<tr><td colspan="5">No assets</td></tr>')+
+        (assets.assets.map(a=>'<tr><td><b>'+esc(a.filename)+'</b><div class="muted tiny mono">'+esc(a.id)+'</div></td><td>'+esc(a.kind)+'</td><td>'+bytes(a.size_bytes)+'</td><td>'+esc(a.course_id||'—')+'</td><td><button class="btn btn-danger btn-small asset-delete" data-id=""+encodeURIComponent(a.id)+"">Delete</button></td></tr>').join('')||'<tr><td colspan="5">No assets</td></tr>')+
       '</tbody></table></div></section>';
 
   const status=$('#asset-upload-status');
+  $('.asset-delete').forEach(btn=>btn.onclick=()=>removeAsset(btn.dataset.id));
+
   $('#create-course-from-content').onclick=()=>nav('admin',{tab:'courses'});
   $('#asset-upload').onclick=async()=>{
     const file=$('#asset-file').files[0];
