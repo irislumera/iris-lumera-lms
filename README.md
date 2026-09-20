@@ -4,7 +4,7 @@ A premium, self-hostable corporate LMS for employee learning, content delivery, 
 
 ## Deployment
 
-This project runs as a Cloudflare Worker with D1 and R2. See the Cloudflare dashboard or use Wrangler from the command line.
+This project runs as a Cloudflare Worker with D1 and Workers KV. See the Cloudflare dashboard or use Wrangler from the command line.
 
 ## Support
 
