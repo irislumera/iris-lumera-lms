@@ -38,6 +38,53 @@ async function setup(env,request){
   return json({ok:true,id});
 }
 
+async function admins(env,request){
+  await authCsrf(env,request,'admin');
+  const rows=await env.DB.prepare("SELECT id,email,first_name,last_name,role,status,must_change_password,created_at,last_login_at FROM users WHERE role='admin' ORDER BY last_name,first_name").all();
+  return json({admins:rows.results||[]});
+}
+async function createAdmin(env,request){
+  const s=await authCsrf(env,request,'admin');
+  const b=await bodyJson(request);
+  const email=String(b.email||'').trim().toLowerCase();
+  const firstName=String(b.firstName||'').trim();
+  const lastName=String(b.lastName||'').trim();
+  const password=String(b.password||'');
+  if(!email||!firstName||!lastName||password.length<10)return json({error:'First name, last name, email and a 10+ character password are required'},400);
+  if(await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first())return json({error:'A user with that email already exists'},409);
+  const pass=await derivePassword(password),id=randomId(),t=now();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,password_salt,first_name,last_name,role,status,must_change_password,xp,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,email,pass.hash,pass.salt,firstName,lastName,'admin','active',1,0,t,t).run();
+  await audit(env,s.id,'admin.created','user',id,{email});
+  return json({ok:true,id,user:{id,email,firstName,lastName,role:'admin',status:'active',mustChangePassword:true}},201);
+}
+async function adminStatus(env,request,id){
+  const s=await authCsrf(env,request,'admin');
+  const b=await bodyJson(request);
+  const status=b.status==='active'?'active':'inactive';
+  if(id===s.id&&status==='inactive')return json({error:'You cannot deactivate your own administrator account'},400);
+  const target=await env.DB.prepare("SELECT id,status FROM users WHERE id=? AND role='admin'").bind(id).first();
+  if(!target)return json({error:'Administrator not found'},404);
+  if(status==='inactive'&&target.status==='active'){
+    const active=await env.DB.prepare("SELECT COUNT(*) n FROM users WHERE role='admin' AND status='active'").first();
+    if(Number(active?.n||0)<=1)return json({error:'At least one active administrator must remain'},400);
+  }
+  await env.DB.prepare("UPDATE users SET status=?,updated_at=? WHERE id=? AND role='admin'").bind(status,now(),id).run();
+  if(status==='inactive')await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+  await audit(env,s.id,`admin.${status}`,'user',id,{});
+  return json({ok:true,status});
+}
+async function resetAdminPassword(env,request,id){
+  const s=await authCsrf(env,request,'admin');
+  const b=await bodyJson(request);
+  const password=String(b.password||'');
+  if(password.length<10)return json({error:'Password must be at least 10 characters'},400);
+  if(!(await env.DB.prepare("SELECT id FROM users WHERE id=? AND role='admin'").bind(id).first()))return json({error:'Administrator not found'},404);
+  const pass=await derivePassword(password);
+  await env.DB.prepare("UPDATE users SET password_hash=?,password_salt=?,must_change_password=1,updated_at=? WHERE id=? AND role='admin'").bind(pass.hash,pass.salt,now(),id).run();
+  await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(id).run();
+  await audit(env,s.id,'admin.password_reset','user',id,{});
+  return json({ok:true});
+}
 async function overview(env,request){
   const s=await authCsrf(env,request,'admin');
   const [learners,courses,enrollments,certificates,scorm]=await Promise.all([
@@ -150,6 +197,10 @@ async function api(env,request){
     if(parts[0]==='api'&&parts[1]==='admin'){
       const a=parts[2];
       if(a==='overview')return overview(env,request);
+      if(a==='admins'&&request.method==='GET')return admins(env,request);
+      if(a==='admins'&&request.method==='POST')return createAdmin(env,request);
+      if(a==='admin'&&parts[3]&&parts[4]==='status'&&request.method==='PATCH')return adminStatus(env,request,parts[3]);
+      if(a==='admin'&&parts[3]&&parts[4]==='password'&&request.method==='POST')return resetAdminPassword(env,request,parts[3]);
       if(a==='learners'&&request.method==='GET')return learners(env,request);
       if(a==='learners'&&request.method==='POST')return createLearner(env,request);
       if(a==='learner'&&parts[3]&&parts[4]==='status')return learnerStatus(env,request,parts[3]);
