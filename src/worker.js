@@ -209,15 +209,16 @@ async function assets(env,request){
     const filename=cleanName(url.searchParams.get('filename')||'upload.bin');
     const courseId=url.searchParams.get('courseId')||null;
     const kind=url.searchParams.get('kind')||'general';
-    const size=Number(request.headers.get('Content-Length')||0);
-    if(size<=0)return json({error:'File size could not be determined'},400);
+    if(!request.body)return json({error:'Upload body is empty'},400);
+    const bytes=await request.arrayBuffer();
+    const size=bytes.byteLength;
+    if(size<=0)return json({error:'File is empty'},400);
     if(size>MAX_ASSET_BYTES)return json({error:'File exceeds the 500 MB content limit'},413);
     if(size>KV_VALUE_BYTES)return json({error:'Files above 25 MiB must use the chunked upload flow'},413);
-    if(!request.body)return json({error:'Upload body is empty'},400);
     const id=randomId(),key=`uploads/${new Date().toISOString().slice(0,10)}/${id}-${filename}`,mime=mimeFor(filename,request.headers.get('Content-Type')||'');
-    await env.CONTENT.put(key,request.body,{metadata:{contentType:mime}});
-    await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,courseId,key,filename,mime,size,kind,s.id,now()).run();
-    await audit(env,s.id,'asset.uploaded','asset',id,{filename,kind,size,courseId,storage:'kv'});
+    await env.CONTENT.put(key,bytes,{metadata:{contentType:mime}});
+    await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,courseId,key,filename,mime,size,kind,s.user_id,now()).run();
+    await audit(env,s.user_id,'asset.uploaded','asset',id,{filename,kind,size,courseId,storage:'kv'});
     return json({ok:true,asset:{id,courseId,filename,mimeType:mime,sizeBytes:size,kind}},201);
   }
   return json({error:'Method not allowed'},405);
@@ -235,7 +236,7 @@ async function assetUploadStart(env,request){
   if(totalChunks>MAX_ASSET_CHUNKS)return json({error:'File has too many chunks'},413);
   const uploadId=randomId(20);
   const manifest={
-    uploadId,createdBy:s.id,filename,courseId,kind,size,mime,totalChunks,createdAt:now()
+    uploadId,createdBy:s.user_id,filename,courseId,kind,size,mime,totalChunks,createdAt:now()
   };
   await env.CONTENT.put(`uploads/meta/${uploadId}`,JSON.stringify(manifest),{metadata:{contentType:'application/json'}});
   return json({ok:true,uploadId,totalChunks,chunkSize:UPLOAD_CHUNK_BYTES});
@@ -247,7 +248,7 @@ async function assetUploadChunk(env,request){
   const index=Number(url.searchParams.get('index'));
   if(!uploadId||!Number.isInteger(index))return json({error:'Upload ID and chunk index are required'},400);
   const meta=await env.CONTENT.get(`uploads/meta/${uploadId}`,{type:'json'});
-  if(!meta||meta.createdBy!==s.id)return json({error:'Upload not found'},404);
+  if(!meta||meta.createdBy!==s.user_id)return json({error:'Upload not found'},404);
   if(index<0||index>=meta.totalChunks)return json({error:'Invalid chunk index'},400);
   if(!request.body)return json({error:'Chunk body is empty'},400);
   const bytes=await request.arrayBuffer();
@@ -267,9 +268,9 @@ async function assetUploadFinalize(env,request){
     if(!exists?.value)return json({error:`Upload is incomplete. Missing chunk ${i+1} of ${meta.totalChunks}.`},409);
   }
   const id=randomId(),key=`uploads/chunked/${uploadId}`;
-  await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,meta.courseId,key,meta.filename,meta.mime,meta.size,meta.kind,s.id,now()).run();
+  await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,meta.courseId,key,meta.filename,meta.mime,meta.size,meta.kind,s.user_id,now()).run();
   await env.CONTENT.delete(`uploads/meta/${uploadId}`);
-  await audit(env,s.id,'asset.uploaded','asset',id,{filename:meta.filename,kind:meta.kind,size:meta.size,courseId:meta.courseId,storage:'kv-chunked',chunks:meta.totalChunks});
+  await audit(env,s.user_id,'asset.uploaded','asset',id,{filename:meta.filename,kind:meta.kind,size:meta.size,courseId:meta.courseId,storage:'kv-chunked',chunks:meta.totalChunks});
   return json({ok:true,asset:{id,courseId:meta.courseId,filename:meta.filename,mimeType:meta.mime,sizeBytes:meta.size,kind:meta.kind}},201);
 }
 async function deleteAsset(env,request,id){
