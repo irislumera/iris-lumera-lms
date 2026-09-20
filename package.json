@@ -2,7 +2,7 @@
   "name": "iris-lumera-lms",
   "version": "0.2.0",
   "private": true,
-  "description": "IRIS LUMERA — free/self-hostable corporate learning management system on Cloudflare Workers, D1 and R2.",
+  "description": "IRIS LUMERA — free/self-hostable corporate learning management system on Cloudflare Workers, D1 and Workers KV.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
