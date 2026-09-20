@@ -102,8 +102,8 @@ export async function persistScormPackage(env,userId,courseId,filename,bytes,ins
     await env.CONTENT.put(`${prefix}/${path}`,data,{metadata:{contentType}});
   }
   const manifestAssetId=randomId();
-  await env.DB.prepare(`INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)`)
-    .bind(manifestAssetId,courseId||null,`${prefix}/${inspected.manifestKey}`,filename,'application/zip',bytes.byteLength,'scorm-manifest',userId,now()).run();
+  await env.DB.prepare(`INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at,title,status,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(manifestAssetId,courseId||null,`${prefix}/${inspected.manifestKey}`,filename,'application/zip',bytes.byteLength,'scorm',userId,now(),inspected.title,'draft',null).run();
   await env.DB.prepare(`INSERT INTO scorm_packages(id,course_id,asset_id,title,version,launch_path,manifest_xml,storage_prefix,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)`)
     .bind(id,courseId||null,manifestAssetId,inspected.title,inspected.version,inspected.launchPath,inspected.xml,prefix,now(),userId).run();
   return {id,...inspected,storagePrefix:prefix};
