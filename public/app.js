@@ -131,7 +131,96 @@ async function editLesson(lid,mid,cid){const d=await api(`/api/admin/course/${ci
 function normalizeLessonForm(f){const b=Object.fromEntries(new FormData(f));b.required=Boolean(b.required);b.durationMinutes=Number(b.durationMinutes||10);b.position=Number(b.position||1);b.xpReward=Number(b.xpReward||20);return b}
 async function deleteLessonAdmin(id){if(!confirm('Delete this lesson?'))return;try{await api(`/api/admin/lesson/${id}`,{method:'DELETE',body:'{}'});await window.__builderRefresh?.();toast('Lesson deleted.')}catch(e){toast(e.message)}}
 
-async function adminContent(c){const courses=await api('/api/admin/courses');const assets=await api('/api/admin/assets');const modules=ADMIN_CACHE.modules||{};c.innerHTML=`<div class="grid-2"><section class="panel"><div class="panel-head"><div><h3>Upload learning content</h3><p>PDFs, videos, audio, presentations, images and other lesson assets are stored in free Cloudflare KV.</p></div></div><div class="upload-drop"><strong>Select a file to upload</strong><span>The file is stored privately and can be attached to a lesson from Course Builder.</span><input id="asset-file" type="file" style="margin-top:14px;max-width:100%"><select id="asset-course" class="select" style="margin-top:12px"><option value="">No course association</option>${courses.courses.map(co=>`<option value="${co.id}">${esc(co.title)}</option>`).join('')}</select><select id="asset-kind" class="select" style="margin-top:10px"><option value="general">General</option><option value="lesson">Lesson asset</option><option value="course-cover">Course cover</option><option value="certificate-background">Certificate background</option></select><button id="asset-upload" class="btn btn-primary" style="margin-top:12px">Upload file</button></div></section><section class="panel"><div class="panel-head"><div><h3>Import SCORM</h3><p>SCORM 1.2 / 2004 packages are inspected, unpacked and launched inside the LMS runtime.</p></div></div><div class="field"><label>Course</label><select id="scorm-course" class="select"><option value="">Choose a course</option>${courses.courses.map(co=>`<option value="${co.id}">${esc(co.title)}</option>`).join('')}</select></div><div class="field" style="margin-top:10px"><label>Module (optional)</label><select id="scorm-module" class="select"><option value="">Create an Interactive Modules section automatically</option></select></div><div class="field" style="margin-top:10px"><label>SCORM ZIP</label><input id="scorm-file" class="input" type="file" accept=".zip,application/zip"></div><button id="scorm-upload" class="btn btn-primary" style="margin-top:12px">Import SCORM package</button><div class="help" style="margin-top:10px">Free storage mode: individual files are capped at 25 MiB and the SCORM ZIP is capped at 25 MB.</div></section></div><section class="section panel"><div class="panel-head"><div><h3>Stored assets</h3><p>${assets.assets.length} files currently stored in Cloudflare KV.</p></div></div><div class="table-wrap"><table class="table"><thead><tr><th>File</th><th>Kind</th><th>Size</th><th>Course</th><th></th></tr></thead><tbody>${assets.assets.map(a=>`<tr><td><b>${esc(a.filename)}</b><div class="muted tiny mono">${esc(a.id)}</div></td><td>${esc(a.kind)}</td><td>${bytes(a.size_bytes)}</td><td>${esc(a.course_id||'—')}</td><td><button class="btn btn-danger btn-small" onclick="removeAsset('${encodeURIComponent(a.id)}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="5">No assets</td></tr>'}</tbody></table></div></section>`;$('#asset-upload').onclick=async()=>{const file=$('#asset-file').files[0];if(!file)return toast('Choose a file.');try{const url=`/api/admin/assets?filename=${encodeURIComponent(file.name)}&courseId=${encodeURIComponent($('#asset-course').value)}&kind=${encodeURIComponent($('#asset-kind').value)}`;const r=await api(url,{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});toast(`Uploaded ${r.asset.filename}`);adminContent(c)}catch(e){toast(e.message)}};$('#scorm-course').onchange=async()=>{const courseId=$('#scorm-course').value;if(!courseId){$('#scorm-module').innerHTML='<option value="">Choose a course first</option>';return}const d=await api(`/api/admin/course/${courseId}`);$('#scorm-module').innerHTML='<option value="">Auto-create Interactive Modules</option>'+d.modules.map(m=>`<option value="${m.id}">${esc(m.title)}</option>`).join('')};$('#scorm-upload').onclick=async()=>{const file=$('#scorm-file').files[0],courseId=$('#scorm-course').value;if(!file||!courseId)return toast('Choose a course and SCORM ZIP first');try{const url=`/api/admin/scorm/upload?courseId=${encodeURIComponent(courseId)}&moduleId=${encodeURIComponent($('#scorm-module').value)}&filename=${encodeURIComponent(file.name)}`;const r=await api(url,{method:'POST',headers:{'Content-Type':'application/zip'},body:file});toast(`SCORM imported: ${r.package.title}`);adminContent(c)}catch(e){toast(e.message)}}}
+async function adminContent(c){
+  const [courses,assets]=await Promise.all([api('/api/admin/courses'),api('/api/admin/assets')]);
+  const courseOptions=courses.courses.length
+    ? '<option value="">No course association</option>'+courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
+    : '<option value="">No courses available yet</option>';
+  const scormOptions=courses.courses.length
+    ? '<option value="">Choose a course</option>'+courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
+    : '<option value="">Create a course first</option>';
+  const courseHelp=courses.courses.length
+    ? '<div class="help" style="margin-top:7px">Course association is optional for general files. Use Courses → New course when a file belongs to a specific learning path.</div>'
+    : '<div class="callout" style="margin-top:10px"><b>No courses have been created yet.</b> General files can still be uploaded without a course. For SCORM, create a course first.</div>';
+  c.innerHTML=
+    '<div class="grid-2">'+
+      '<section class="panel"><div class="panel-head"><div><h3>Upload learning content</h3><p>PDFs, videos, audio, presentations, images and other lesson assets are stored in free Cloudflare KV.</p></div><span class="tag">Up to 500 MB</span></div>'+
+        '<div class="upload-drop"><strong>Select a file to upload</strong><span>Files up to 25 MiB upload directly. Larger files are sent safely in smaller chunks.</span>'+
+          '<input id="asset-file" type="file" style="margin-top:14px;max-width:100%">'+
+          '<select id="asset-course" class="select" style="margin-top:12px">'+courseOptions+'</select>'+
+          '<select id="asset-kind" class="select" style="margin-top:10px"><option value="general">General</option><option value="lesson">Lesson asset</option><option value="course-cover">Course cover</option><option value="certificate-background">Certificate background</option></select>'+
+          courseHelp+
+          '<div id="asset-upload-status" class="help" style="margin-top:10px"></div>'+
+          '<button id="asset-upload" class="btn btn-primary" style="margin-top:12px">Upload file</button>'+
+        '</div>'+
+      '</section>'+
+      '<section class="panel"><div class="panel-head"><div><h3>Import SCORM</h3><p>SCORM 1.2 / 2004 packages are inspected, unpacked and launched inside the LMS runtime.</p></div></div>'+
+        '<div class="field"><label>Course</label><select id="scorm-course" class="select">'+scormOptions+'</select></div>'+
+        '<button id="create-course-from-content" class="btn btn-quiet btn-small" style="margin-top:9px" type="button">Create course</button>'+
+        '<div class="field" style="margin-top:10px"><label>Module (optional)</label><select id="scorm-module" class="select"><option value="">Create an Interactive Modules section automatically</option></select></div>'+
+        '<div class="field" style="margin-top:10px"><label>SCORM ZIP</label><input id="scorm-file" class="input" type="file" accept=".zip,application/zip"></div>'+
+        '<div id="scorm-upload-status" class="help" style="margin-top:9px">SCORM packages are limited to 25 MiB because the edge parser needs the package in memory.</div>'+
+        '<button id="scorm-upload" class="btn btn-primary" style="margin-top:12px" '+(courses.courses.length?'':'disabled')+'>Import SCORM package</button>'+
+      '</section>'+
+    '</div>'+
+    '<section class="section panel"><div class="panel-head"><div><h3>Stored assets</h3><p>'+assets.assets.length+' files currently stored in Cloudflare KV.</p></div></div>'+
+      '<div class="table-wrap"><table class="table"><thead><tr><th>File</th><th>Kind</th><th>Size</th><th>Course</th><th></th></tr></thead><tbody>'+
+        (assets.assets.map(a=>'<tr><td><b>'+esc(a.filename)+'</b><div class="muted tiny mono">'+esc(a.id)+'</div></td><td>'+esc(a.kind)+'</td><td>'+bytes(a.size_bytes)+'</td><td>'+esc(a.course_id||'—')+'</td><td><button class="btn btn-danger btn-small" onclick="removeAsset(\\''+encodeURIComponent(a.id)+'\\')">Delete</button></td></tr>').join('')||'<tr><td colspan="5">No assets</td></tr>')+
+      '</tbody></table></div></section>';
+
+  const status=$('#asset-upload-status');
+  $('#create-course-from-content').onclick=()=>nav('admin',{tab:'courses'});
+  $('#asset-upload').onclick=async()=>{
+    const file=$('#asset-file').files[0];
+    const courseId=$('#asset-course').value||'';
+    const kind=$('#asset-kind').value||'general';
+    if(!file)return toast('Choose a file.');
+    const max=500*1024*1024;
+    if(file.size>max)return toast('Content files are limited to 500 MB.');
+    const button=$('#asset-upload');button.disabled=true;
+    try{
+      if(file.size<=25*1024*1024){
+        status.textContent='Uploading…';
+        const url='/api/admin/assets?filename='+encodeURIComponent(file.name)+'&courseId='+encodeURIComponent(courseId)+'&kind='+encodeURIComponent(kind);
+        const r=await api(url,{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});
+        toast('Uploaded '+r.asset.filename);
+      }else{
+        const started=await api('/api/admin/assets/start',{method:'POST',body:JSON.stringify({filename:file.name,courseId,mimeType:file.type||'application/octet-stream',kind,size:file.size})});
+        const chunkSize=Number(started.chunkSize||20*1024*1024),total=Number(started.totalChunks||Math.ceil(file.size/chunkSize));
+        for(let i=0;i<total;i++){
+          const from=i*chunkSize,to=Math.min(file.size,from+chunkSize);
+          status.textContent='Uploading part '+(i+1)+' of '+total+' · '+Math.round(to/file.size*100)+'%';
+          await api('/api/admin/assets/chunk?uploadId='+encodeURIComponent(started.uploadId)+'&index='+i,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file.slice(from,to)});
+        }
+        status.textContent='Finalizing upload…';
+        const r=await api('/api/admin/assets/finalize',{method:'POST',body:JSON.stringify({uploadId:started.uploadId})});
+        toast('Uploaded '+r.asset.filename);
+      }
+      status.textContent='Upload complete.';
+      await adminContent(c);
+    }catch(e){status.textContent=e.message;toast(e.message)}
+    finally{button.disabled=false}
+  };
+
+  $('#scorm-course').onchange=async()=>{
+    const courseId=$('#scorm-course').value;
+    if(!courseId){$('#scorm-module').innerHTML='<option value="">Choose a course first</option>';return}
+    const d=await api('/api/admin/course/'+encodeURIComponent(courseId));
+    $('#scorm-module').innerHTML='<option value="">Auto-create Interactive Modules</option>'+d.modules.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.title)+'</option>').join('')
+  };
+  $('#scorm-upload').onclick=async()=>{
+    const file=$('#scorm-file').files[0],courseId=$('#scorm-course').value;
+    if(!file||!courseId)return toast('Choose a course and SCORM ZIP first');
+    if(file.size>25*1024*1024)return toast('SCORM ZIP is limited to 25 MiB in free storage mode.');
+    try{
+      $('#scorm-upload').disabled=true;$('#scorm-upload-status').textContent='Importing SCORM package…';
+      const url='/api/admin/scorm/upload?courseId='+encodeURIComponent(courseId)+'&moduleId='+encodeURIComponent($('#scorm-module').value)+'&filename='+encodeURIComponent(file.name);
+      const r=await api(url,{method:'POST',headers:{'Content-Type':'application/zip'},body:file});
+      toast('SCORM imported: '+r.package.title);adminContent(c);
+    }catch(e){$('#scorm-upload-status').textContent=e.message;toast(e.message)}
+    finally{$('#scorm-upload').disabled=false}
+  };
+}
 async function removeAsset(id){if(!confirm('Delete this stored asset?'))return;try{await api(`/api/admin/asset/${id}`,{method:'DELETE',body:'{}'});toast('Asset deleted.');nav('admin',{tab:'content'})}catch(e){toast(e.message)}}
 
 async function adminAssessments(c){const d=await api('/api/admin/quizzes');c.innerHTML=`<div class="toolbar"><div class="toolbar-left"><span class="muted small">Reusable assessments for quiz lessons.</span></div><div class="toolbar-right"><button class="btn btn-primary" onclick="createQuizAdmin()">+ New assessment</button></div></div><div class="grid-2">${d.quizzes.map(q=>`<article class="panel"><div class="panel-head"><div><span class="tag">${Number(q.question_count||0)} questions</span><h3 style="margin-top:10px">${esc(q.title)}</h3><p>${esc(q.description||'Passing score')} · ${Number(q.passing_score||70)}%</p></div><div class="inline-actions"><button class="btn btn-primary btn-small" onclick="editQuiz('${encodeURIComponent(q.id)}')">Open</button><button class="btn btn-danger btn-small" onclick="deleteQuiz('${encodeURIComponent(q.id)}')">Delete</button></div></div></article>`).join('')||'<div class="empty">No assessments yet.</div>'}</div>`}
