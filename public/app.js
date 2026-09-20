@@ -227,9 +227,7 @@ async function adminContent(c){
       ? courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
       : '<option value="" disabled>No courses created yet</option>'
   );
-  const scormOptions=courses.courses.length
-    ? '<option value="">Choose a course</option>'+courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
-    : '<option value="">Create a course first</option>';
+  const scormOptions='<option value="">Auto-create course from SCORM title</option>'+(courses.courses.length?courses.courses.map(co=>'<option value="'+esc(co.id)+'">Use existing: '+esc(co.title)+' · '+esc(co.status)+'</option>').join(''):'');
   const courseHelp=courses.courses.length
     ? '<div class="help" style="margin-top:7px">Course association is optional for general files. Use Courses → New course when a file belongs to a specific learning path.</div>'
     : '<div class="callout" style="margin-top:10px"><b>No courses have been created yet.</b> General files can still be uploaded without a course. For SCORM, create a course first.</div>';
@@ -246,12 +244,12 @@ async function adminContent(c){
         '</div>'+
       '</section>'+
       '<section class="panel"><div class="panel-head"><div><h3>Import SCORM</h3><p>SCORM 1.2 / 2004 packages are inspected, unpacked and launched inside the LMS runtime.</p></div></div>'+
-        '<div class="field"><label>Course</label><select id="scorm-course" class="select">'+scormOptions+'</select></div>'+
+        '<div class="field"><label>Course</label><select id="scorm-course" class="select">'+scormOptions+'</select><div class="help" style="margin-top:6px">Leave this on Auto-create and the SCORM manifest title becomes a new draft course.</div></div>'+
         '<button id="create-course-from-content" class="btn btn-quiet btn-small" style="margin-top:9px" type="button">Create course</button>'+
         '<div class="field" style="margin-top:10px"><label>Module (optional)</label><select id="scorm-module" class="select"><option value="">Create an Interactive Modules section automatically</option></select></div>'+
         '<div class="field" style="margin-top:10px"><label>SCORM ZIP</label><input id="scorm-file" class="input" type="file" accept=".zip,application/zip"></div>'+
         '<div id="scorm-upload-status" class="help" style="margin-top:9px">SCORM packages are limited to 25 MiB because the edge parser needs the package in memory.</div>'+
-        '<button id="scorm-upload" class="btn btn-primary" style="margin-top:12px" '+(courses.courses.length?'':'disabled')+'>Import SCORM package</button>'+
+        '<button id="scorm-upload" class="btn btn-primary" style="margin-top:12px">Import SCORM package</button>'+
       '</section>'+
     '</div>'+
     '<section class="section panel"><div class="panel-head"><div><h3>Stored assets</h3><p>'+assets.assets.length+' files currently stored in Cloudflare KV.</p></div></div>'+
@@ -303,13 +301,13 @@ async function adminContent(c){
   };
   $('#scorm-upload').onclick=async()=>{
     const file=$('#scorm-file').files[0],courseId=$('#scorm-course').value;
-    if(!file||!courseId)return toast('Choose a course and SCORM ZIP first');
+    if(!file)return toast('Choose a SCORM ZIP first');
     if(file.size>25*1024*1024)return toast('SCORM ZIP is limited to 25 MiB in free storage mode.');
     try{
       $('#scorm-upload').disabled=true;$('#scorm-upload-status').textContent='Importing SCORM package…';
-      const url='/api/admin/scorm/upload?courseId='+encodeURIComponent(courseId)+'&moduleId='+encodeURIComponent($('#scorm-module').value)+'&filename='+encodeURIComponent(file.name);
+      const url='/api/admin/scorm/upload?'+(courseId?'courseId='+encodeURIComponent(courseId)+'&':'')+'moduleId='+encodeURIComponent($('#scorm-module').value)+'&filename='+encodeURIComponent(file.name);
       const r=await api(url,{method:'POST',headers:{'Content-Type':'application/zip'},body:file});
-      toast('SCORM imported: '+r.package.title);adminContent(c);
+      toast(r.autoCreatedCourse?'SCORM imported and draft course created.':'SCORM imported into course.');adminContent(c);
     }catch(e){$('#scorm-upload-status').textContent=e.message;toast(e.message)}
     finally{$('#scorm-upload').disabled=false}
   };
