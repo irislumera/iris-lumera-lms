@@ -52,9 +52,7 @@ export async function currentSession(env, request) {
   const token = decodeURIComponent(match[1]);
   const tokenHash = await sha256(token);
   const row = await env.DB.prepare(
-    `SELECT s.*,u.email,u.first_name,u.last_name,u.employee_id,u.department,u.job_title,u.role,u.status,u.must_change_password,u.xp
-     FROM sessions s JOIN users u ON u.id=s.user_id
-     WHERE s.token_hash=? AND s.expires_at>?`
+    `SELECT s.id AS session_id,u.id,u.email,u.first_name,u.last_name,u.employee_id,u.department,u.job_title,u.role,u.status,u.must_change_password,u.xp,s.csrf_token,s.expires_at,s.created_at,s.last_seen_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?`
   ).bind(tokenHash,now()).first();
   if (!row || row.status !== 'active') return null;
   return row;
