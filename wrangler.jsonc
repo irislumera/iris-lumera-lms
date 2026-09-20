@@ -21,5 +21,11 @@
     "SUPPORT_EMAIL": "irislumera@hotmail.com",
     "SESSION_DAYS": "7",
     "SCORM_MAX_BYTES": "26214400"
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CONTENT",
+      "id": "fbc9aeb42a0e49ecbf0ae69b8a883305"
+    }
+  ]
 }
