@@ -99,7 +99,7 @@ export async function persistScormPackage(env,userId,courseId,filename,bytes,ins
   for(const [path,data] of Object.entries(inspected.files)){
     const ext='.'+(path.split('.').pop()||'').toLowerCase();
     const contentType=mimeByExt.get(ext)||'application/octet-stream';
-    await env.CONTENT.put(`${prefix}/${path}`,data,{httpMetadata:{contentType}});
+    await env.CONTENT.put(`${prefix}/${path}`,data,{metadata:{contentType}});
   }
   const manifestAssetId=randomId();
   await env.DB.prepare(`INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)`)
