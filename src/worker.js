@@ -297,10 +297,10 @@ async function scormUpload(env,request){
   const filename=cleanName(url.searchParams.get('filename')||'package.zip');
   const limit=Math.min(Number(env.SCORM_MAX_BYTES||26214400),25*1024*1024);
   const declaredSize=Number(request.headers.get('Content-Length')||0);
-  if(declaredSize>limit)return json({error:\`SCORM package must be no larger than \${Math.round(limit/1048576)} MiB in this free release\`},413);
+  if(declaredSize>limit)return json({error:`SCORM package must be no larger than ${Math.round(limit/1048576)} MiB in this free release`},413);
   if(!request.body)return json({error:'SCORM upload body is empty'},400);
   const bytes=await request.arrayBuffer();
-  if(bytes.byteLength<=0||bytes.byteLength>limit)return json({error:\`SCORM package must be between 1 byte and \${Math.round(limit/1048576)} MiB in this free release\`},413);
+  if(bytes.byteLength<=0||bytes.byteLength>limit)return json({error:`SCORM package must be between 1 byte and ${Math.round(limit/1048576)} MiB in this free release`},413);
 
   const inspected=await inspectManifest(bytes);
   let courseId=selectedCourseId;
@@ -310,7 +310,7 @@ async function scormUpload(env,request){
     courseId=randomId();
     const slug=await uniqueSlug(env,title);
     const created=now();
-    await env.DB.prepare(\`INSERT INTO courses(id,slug,title,short_description,description,category,level,status,cover_asset_id,xp_reward,certificate_enabled,passing_score,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)\`)
+    await env.DB.prepare(`INSERT INTO courses(id,slug,title,short_description,description,category,level,status,cover_asset_id,xp_reward,certificate_enabled,passing_score,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .bind(courseId,slug,title,'Imported SCORM learning package','Course created automatically from an imported SCORM package.','Imported content','Foundation','draft',null,200,1,70,created,created).run();
     await audit(env,s.id,'course.created_from_scorm','course',courseId,{title,filename});
   }
@@ -327,7 +327,7 @@ async function scormUpload(env,request){
 
   const lessonId=randomId();
   const lp=Number((await env.DB.prepare('SELECT COALESCE(MAX(position),0)+1 p FROM lessons WHERE module_id=?').bind(targetModule.id).first())?.p||1);
-  await env.DB.prepare(\`INSERT INTO lessons(id,module_id,title,type,body,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)\`)
+  await env.DB.prepare(`INSERT INTO lessons(id,module_id,title,type,body,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
     .bind(lessonId,targetModule.id,inspected.title,'scorm','',pkg.id,Number(url.searchParams.get('duration')||15),lp,1,50,now(),now()).run();
   await audit(env,s.id,'scorm.imported','scorm_package',pkg.id,{courseId,moduleId:targetModule.id,lessonId,version:inspected.version,autoCourse:!selectedCourseId});
   return json({ok:true,autoCreatedCourse:!selectedCourseId,course:{id:courseId,title:inspected.title},package:{id:pkg.id,title:pkg.title,version:pkg.version,launchPath:pkg.launchPath,courseId,moduleId:targetModule.id,lessonId}},201);
