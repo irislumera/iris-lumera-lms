@@ -1,0 +1,16 @@
+{
+  "name": "iris-lumera-lms",
+  "version": "0.2.0",
+  "private": true,
+  "description": "IRIS LUMERA — free/self-hostable corporate learning management system on Cloudflare Workers, D1 and R2.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply iris-lumera-db --remote",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  }
+}
