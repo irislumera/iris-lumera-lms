@@ -88,3 +88,5 @@ body{background:radial-gradient(circle at 8% 4%,rgba(245,167,181,.20),transparen
 .auth-switch .btn{margin:0}
 
 .upload-progress{height:7px;margin-top:7px;border-radius:999px;background:#f1e6e9;overflow:hidden}.upload-progress i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#d34c61,#ee8fa0);transition:width .18s ease}.upload-state{color:#7b5962}.upload-success{color:#137b5b;font-weight:800}.upload-failed{color:#b2384e;font-weight:800}
+
+.content-picks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.content-pick{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fff}.content-pick input{margin-top:3px}.content-pick small{font-weight:700}.content-pick:has(input:checked){border-color:#e58b9a;background:#fff5f6}
