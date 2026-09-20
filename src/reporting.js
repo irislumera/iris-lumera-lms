@@ -30,7 +30,7 @@ export async function learningReport(env,request,authCsrf,json){
 
   if(courseId){conditions.push('e.course_id=?');params.push(courseId);}
   if(search){
-    conditions.push('(u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR COALESCE(u.employee_id,\\'\\') LIKE ? OR c.title LIKE ?)');
+    conditions.push("(u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR COALESCE(u.employee_id,'') LIKE ? OR c.title LIKE ?)");
     const q='%'+search+'%';
     params.push(q,q,q,q,q);
   }
