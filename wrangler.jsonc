@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "iris-lumera-lms",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-20",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "iris-lumera-db",
+      "database_id": "REPLACE_AFTER_WRANGLER_D1_CREATE",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "CONTENT",
+      "bucket_name": "iris-lumera-content"
+    }
+  ],
+  "vars": {
+    "APP_NAME": "IRIS LUMERA",
+    "SUPPORT_EMAIL": "irislumera@hotmail.com",
+    "SESSION_DAYS": "7",
+    "SCORM_MAX_BYTES": "26214400"
+  }
+}
