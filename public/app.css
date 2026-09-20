@@ -83,3 +83,6 @@ body{background:radial-gradient(circle at 8% 4%,rgba(245,167,181,.20),transparen
 .answer-editor-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-top:8px}
 .answer-editor-row .option{padding:0;white-space:nowrap}
 .answer-correct input{accent-color:#c7445a}
+
+.auth-switch{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.auth-switch .btn{margin:0}
