@@ -196,6 +196,23 @@ async function toggleCoursePublish(id,status){
     toast(status==='published'?'Course published.':'Course moved to draft.');await adminCourses(document.getElementById('admin-content'));
   }catch(e){toast(e.message)}
 }
+function xhrUpload(url,file,onProgress=()=>{}){
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST',url,true);
+    xhr.setRequestHeader('Accept','application/json');
+    xhr.withCredentials=true;
+    if(CSRF)xhr.setRequestHeader('X-CSRF-Token',CSRF);
+    xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.round(e.loaded/e.total*100),e.loaded,e.total)};
+    xhr.onload=()=>{
+      let d={};try{d=JSON.parse(xhr.responseText||'{}')}catch{}
+      if(xhr.status>=200&&xhr.status<300){if(d.csrfToken)CSRF=d.csrfToken;resolve(d)}else reject(new Error(d.error||`Upload failed (${xhr.status})`));
+    };
+    xhr.onerror=()=>reject(new Error('Upload failed. Check your connection and try again.'));
+    xhr.onabort=()=>reject(new Error('Upload cancelled.'));
+    xhr.send(file);
+  });
+}
 async function uploadAssetFile(file,courseId,kind,onProgress=()=>{}){
   const max=500*1024*1024;
   if(!file||file.size<=0)throw new Error('Choose a valid file.');
@@ -203,17 +220,17 @@ async function uploadAssetFile(file,courseId,kind,onProgress=()=>{}){
   const mime=file.type||'application/octet-stream';
   if(file.size<=25*1024*1024){
     const url='/api/admin/assets?filename='+encodeURIComponent(file.name)+'&courseId='+encodeURIComponent(courseId||'')+'&kind='+encodeURIComponent(kind||'general');
-    return api(url,{method:'POST',headers:{'Content-Type':mime},body:file});
+    return xhrUpload(url,file,onProgress);
   }
   const started=await api('/api/admin/assets/start',{method:'POST',body:JSON.stringify({filename:file.name,courseId:courseId||'',mimeType:mime,kind:kind||'general',size:file.size})});
   const chunkSize=Number(started.chunkSize||20*1024*1024),total=Number(started.totalChunks||Math.ceil(file.size/chunkSize));
   for(let i=0;i<total;i++){
     const from=i*chunkSize,to=Math.min(file.size,from+chunkSize);
-    await api('/api/admin/assets/chunk?uploadId='+encodeURIComponent(started.uploadId)+'&index='+i,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file.slice(from,to)});
-    onProgress(Math.round(to/file.size*100),i+1,total);
+    const result=await xhrUpload('/api/admin/assets/chunk?uploadId='+encodeURIComponent(started.uploadId)+'&index='+i,file.slice(from,to),(p)=>onProgress(Math.round(((i*chunkSize)+(to-from)*(p/100))/file.size*100),i+1,total));
   }
   return api('/api/admin/assets/finalize',{method:'POST',body:JSON.stringify({uploadId:started.uploadId})});
 }
+
 function courseEditorForm(co={},assets=[]){
   const currentCover=assets.find(a=>a.id===co.cover_asset_id);
   return '<form id="modal-form" class="form-grid">'+
@@ -319,37 +336,25 @@ async function adminContent(c){
   $('.asset-delete').forEach(btn=>btn.onclick=()=>removeAsset(btn.dataset.id));
 
   $('#asset-upload').onclick=async()=>{
-    const file=$('#asset-file').files[0];
-    const courseId=$('#asset-course').value||'';
-    const kind=$('#asset-kind').value||'general';
+    const file=$('#asset-file').files[0],courseId=$('#asset-course').value||'',kind=$('#asset-kind').value||'general';
     if(!file)return toast('Choose a file.');
-    const max=500*1024*1024;
-    if(file.size>max)return toast('Content files are limited to 500 MB.');
-    const button=$('#asset-upload');button.disabled=true;
+    const status=$('#asset-upload-status'),button=$('#asset-upload');
+    button.disabled=true;
+    status.innerHTML='<span class="upload-state">Preparing upload… <b>0%</b></span><div class="upload-progress"><i style="width:0%"></i></div>';
+    const update=(pct,part,total)=>{
+      status.innerHTML='<span class="upload-state">'+(total?('Uploading part '+part+' of '+total):'Uploading')+'… <b>'+pct+'%</b></span><div class="upload-progress"><i style="width:'+pct+'%"></i></div>';
+    };
     try{
-      if(file.size<=25*1024*1024){
-        status.textContent='Uploading…';
-        const url='/api/admin/assets?filename='+encodeURIComponent(file.name)+'&courseId='+encodeURIComponent(courseId)+'&kind='+encodeURIComponent(kind);
-        const r=await api(url,{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});
-        toast('Uploaded '+r.asset.filename);
-      }else{
-        const started=await api('/api/admin/assets/start',{method:'POST',body:JSON.stringify({filename:file.name,courseId,mimeType:file.type||'application/octet-stream',kind,size:file.size})});
-        const chunkSize=Number(started.chunkSize||20*1024*1024),total=Number(started.totalChunks||Math.ceil(file.size/chunkSize));
-        for(let i=0;i<total;i++){
-          const from=i*chunkSize,to=Math.min(file.size,from+chunkSize);
-          status.textContent='Uploading part '+(i+1)+' of '+total+' · '+Math.round(to/file.size*100)+'%';
-          await api('/api/admin/assets/chunk?uploadId='+encodeURIComponent(started.uploadId)+'&index='+i,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file.slice(from,to)});
-        }
-        status.textContent='Finalizing upload…';
-        const r=await api('/api/admin/assets/finalize',{method:'POST',body:JSON.stringify({uploadId:started.uploadId})});
-        toast('Uploaded '+r.asset.filename);
-      }
-      status.textContent='Upload complete.';
+      await uploadAssetFile(file,courseId,kind,update);
+      status.innerHTML='<span class="upload-success">Upload complete ✓</span><div class="upload-progress"><i style="width:100%"></i></div>';
+      toast('Uploaded '+file.name);
+      $('#asset-file').value='';
       await adminContent(c);
-    }catch(e){status.textContent=e.message;toast(e.message)}
-    finally{button.disabled=false}
+    }catch(e){
+      status.innerHTML='<span class="upload-failed">Upload failed: '+esc(e.message)+'</span><div class="upload-progress"><i style="width:0%"></i></div>';
+      toast(e.message);
+    }finally{button.disabled=false}
   };
-
   $('#scorm-course').onchange=async()=>{
     const courseId=$('#scorm-course').value;
     if(!courseId){$('#scorm-module').innerHTML='<option value="">Choose a course first</option>';return}
@@ -360,13 +365,20 @@ async function adminContent(c){
     const file=$('#scorm-file').files[0],courseId=$('#scorm-course').value;
     if(!file)return toast('Choose a SCORM ZIP first');
     if(file.size>25*1024*1024)return toast('SCORM ZIP is limited to 25 MiB in free storage mode.');
+    const button=$('#scorm-upload'),status=$('#scorm-upload-status');button.disabled=true;
+    status.innerHTML='<span class="upload-state">Reading SCORM package… <b>0%</b></span><div class="upload-progress"><i style="width:0%"></i></div>';
     try{
-      $('#scorm-upload').disabled=true;$('#scorm-upload-status').textContent='Importing SCORM package…';
       const url='/api/admin/scorm/upload?'+(courseId?'courseId='+encodeURIComponent(courseId)+'&':'')+'moduleId='+encodeURIComponent($('#scorm-module').value)+'&filename='+encodeURIComponent(file.name);
-      const r=await api(url,{method:'POST',headers:{'Content-Type':'application/zip'},body:file});
-      toast(r.autoCreatedCourse?'SCORM imported and draft course created.':'SCORM imported into course.');adminContent(c);
-    }catch(e){$('#scorm-upload-status').textContent=e.message;toast(e.message)}
-    finally{$('#scorm-upload').disabled=false}
+      const r=await xhrUpload(url,file,(pct)=>{
+        status.innerHTML='<span class="upload-state">Uploading & importing SCORM… <b>'+pct+'%</b></span><div class="upload-progress"><i style="width:'+pct+'%"></i></div>';
+      });
+      status.innerHTML='<span class="upload-success">'+(r.autoCreatedCourse?'SCORM imported and draft course created ✓':'SCORM imported ✓')+'</span><div class="upload-progress"><i style="width:100%"></i></div>';
+      toast(r.autoCreatedCourse?'SCORM imported and draft course created.':'SCORM imported into course.');
+      await adminContent(c);
+    }catch(e){
+      status.innerHTML='<span class="upload-failed">SCORM import failed: '+esc(e.message)+'</span><div class="upload-progress"><i style="width:0%"></i></div>';
+      toast(e.message);
+    }finally{button.disabled=false}
   };
 }
 async function removeAsset(id){if(!confirm('Delete this stored asset?'))return;try{await api(`/api/admin/asset/${id}`,{method:'DELETE',body:'{}'});toast('Asset deleted.');nav('admin',{tab:'content'})}catch(e){toast(e.message)}}
