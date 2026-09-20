@@ -106,7 +106,7 @@ export async function persistScormPackage(env,userId,courseId,filename,bytes,ins
     .bind(manifestAssetId,courseId||null,`${prefix}/${inspected.manifestKey}`,filename,'application/zip',bytes.byteLength,'scorm',userId,now(),inspected.title,'draft',null).run();
   await env.DB.prepare(`INSERT INTO scorm_packages(id,course_id,asset_id,title,version,launch_path,manifest_xml,storage_prefix,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)`)
     .bind(id,courseId||null,manifestAssetId,inspected.title,inspected.version,inspected.launchPath,inspected.xml,prefix,now(),userId).run();
-  return {id,...inspected,storagePrefix:prefix};
+  return {id,assetId:manifestAssetId,...inspected,storagePrefix:prefix};
 }
 
 export async function getRegistration(env,packageId,userId){
