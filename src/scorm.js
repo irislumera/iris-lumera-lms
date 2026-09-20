@@ -38,10 +38,10 @@ async function readZip(bytes){
   const eocd=findEndOfCentralDirectory(data);
   const count=u16(view,eocd+10), centralSize=u32(view,eocd+12), centralOffset=u32(view,eocd+16);
   if(count===0xffff||centralSize===0xffffffff||centralOffset===0xffffffff) throw new Error('ZIP64 SCORM packages are not supported in the free Worker parser');
-  if(count>10000) throw new Error('SCORM package contains too many files');
+  if(count>800) throw new Error('SCORM package contains too many files for free storage mode (maximum 800 files)');
   const files={};
   let totalUncompressed=0;
-  const maxTotalUncompressed=80*1024*1024;
+  const maxTotalUncompressed=70*1024*1024;
   let p=centralOffset;
   for(let i=0;i<count;i++){
     if(u32(view,p)!==0x02014b50) throw new Error('Invalid ZIP central directory');
@@ -52,7 +52,7 @@ async function readZip(bytes){
     const path=normalizePath(name);
     p+=46+nameLen+extraLen+commentLen;
     if(!path || path.endsWith('/')) continue;
-    if(uncompressedSize>50*1024*1024) throw new Error(`SCORM file exceeds 50 MB: ${path}`);
+    if(uncompressedSize>25*1024*1024) throw new Error(`SCORM file exceeds 25 MiB for free storage mode: ${path}`);
     totalUncompressed+=uncompressedSize;
     if(totalUncompressed>maxTotalUncompressed) throw new Error('SCORM package expands beyond the 80 MB free-release safety limit');
     if(u32(view,localOffset)!==0x04034b50) throw new Error('Invalid ZIP local header');
