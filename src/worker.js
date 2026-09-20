@@ -3,6 +3,7 @@ import { audit, awardXP, checkCsrf, clearSessionCookie, createSession, currentSe
 import { issueCertificate, renderCertificateHtml } from './certificates.js';
 import { commitRegistration, getRegistration, inspectManifest, persistScormPackage, playerHtml } from './scorm.js';
 import { learningReport } from './reporting.js';
+import { sendWelcomeEmail, sendCourseAssignedEmail, sendCourseCompletedEmail } from './email.js';
 
 const MAX_ASSET_BYTES=100*1024*1024;
 const FALLBACK_MIME={
@@ -24,7 +25,9 @@ async function login(env,request){
   const user=await env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first();
   if(!user||user.status!=='active')return json({error:'Invalid credentials or inactive account'},401);
   const pass=await derivePassword(password,user.password_salt);if(pass.hash!==user.password_hash)return json({error:'Invalid credentials'},401);
+  const firstLearnerLogin=user.role==='learner'&&!user.last_login_at;
   const session=await createSession(env,user.id);await env.DB.prepare('UPDATE users SET last_login_at=?,updated_at=? WHERE id=?').bind(now(),now(),user.id).run();
+  if(firstLearnerLogin)sendWelcomeEmail(env,user).catch(error=>console.error('welcome_email_failed',error));
   return json({ok:true,user:safeUser(user),csrfToken:session.csrf,mustChangePassword:Boolean(user.must_change_password)},200,{'Set-Cookie':sessionCookie(session.token,session.expires)});
 }
 async function logout(env,request){const s=await currentSession(env,request);if(s)await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(s.id).run();return json({ok:true},200,{'Set-Cookie':clearSessionCookie()});}
@@ -150,19 +153,24 @@ async function enrollAdmin(env,request,id=null){
   const userId=String(b.userId||'').trim();
   const courseId=String(b.courseId||'').trim();
   if(!userId||!courseId)return json({error:'Learner and course are required'},400);
-  if(!(await env.DB.prepare("SELECT id FROM users WHERE id=? AND role='learner'").bind(userId).first()))return json({error:'Learner not found'},404);
-  if(!(await env.DB.prepare("SELECT id FROM courses WHERE id=?").bind(courseId).first()))return json({error:'Course not found'},404);
+  const user=await env.DB.prepare("SELECT id,email,first_name,last_name,status,role FROM users WHERE id=? AND role='learner'").bind(userId).first();
+  if(!user)return json({error:'Learner not found'},404);
+  const course=await env.DB.prepare("SELECT * FROM courses WHERE id=?").bind(courseId).first();
+  if(!course)return json({error:'Course not found'},404);
   const existing=await env.DB.prepare('SELECT id FROM enrollments WHERE user_id=? AND course_id=?').bind(userId,courseId).first();
   const t=now(),dueAt=String(b.dueAt||'').trim()||null,expiresAt=String(b.expiresAt||'').trim()||null;
+  let enrollmentId;
   if(existing){
+    enrollmentId=existing.id;
     await env.DB.prepare("UPDATE enrollments SET status='active',due_at=?,expires_at=?,enrolled_at=COALESCE(enrolled_at,?) WHERE id=?").bind(dueAt,expiresAt,t,existing.id).run();
     await audit(env,s.id,'enrollment.reactivated','enrollment',existing.id,{userId,courseId,dueAt,expiresAt});
-    return json({ok:true,id:existing.id});
+  }else{
+    enrollmentId=randomId();
+    await env.DB.prepare('INSERT INTO enrollments(id,user_id,course_id,status,enrolled_at,due_at,expires_at,completed_at) VALUES(?,?,?,?,?,?,?,?)').bind(enrollmentId,userId,courseId,'active',t,dueAt,expiresAt,null).run();
+    await audit(env,s.id,'enrollment.granted','enrollment',enrollmentId,{userId,courseId,dueAt,expiresAt});
   }
-  const eid=randomId();
-  await env.DB.prepare('INSERT INTO enrollments(id,user_id,course_id,status,enrolled_at,due_at,expires_at,completed_at) VALUES(?,?,?,?,?,?,?,?)').bind(eid,userId,courseId,'active',t,dueAt,expiresAt,null).run();
-  await audit(env,s.id,'enrollment.granted','enrollment',eid,{userId,courseId,dueAt,expiresAt});
-  return json({ok:true,id:eid},201);
+  sendCourseAssignedEmail(env,user,course,dueAt).catch(error=>console.error('assignment_email_failed',error));
+  return json({ok:true,id:enrollmentId},existing?200:201);
 }
 
 async function enrollmentStatus(env,request,id){const s=await authCsrf(env,request,'admin');const b=await bodyJson(request);const status=['active','revoked','completed'].includes(b.status)?b.status:'revoked';await env.DB.prepare('UPDATE enrollments SET status=?,completed_at=CASE WHEN ?=\'completed\' THEN COALESCE(completed_at,?) ELSE completed_at END WHERE id=?').bind(status,status,now(),id).run();await audit(env,s.id,`enrollment.${status}`,'enrollment',id,{});return json({ok:true,status});}
@@ -189,9 +197,36 @@ async function reports(env,request){await authCsrf(env,request,'admin');const co
 async function auditLog(env,request){await authCsrf(env,request,'admin');const rows=await env.DB.prepare(`SELECT a.*,u.first_name,u.last_name FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_user_id ORDER BY a.created_at DESC LIMIT 500`).all();return json({audit:rows.results||[]});}
 
 async function refreshCompletions(env,userId,courseId,moduleId){
-  const module=await env.DB.prepare('SELECT * FROM modules WHERE id=? AND course_id=?').bind(moduleId,courseId).first();if(module){const required=await env.DB.prepare('SELECT COUNT(*) n FROM lessons WHERE module_id=? AND is_required=1').bind(moduleId).first();const done=await env.DB.prepare('SELECT COUNT(*) n FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id WHERE lp.user_id=? AND l.module_id=? AND l.is_required=1 AND lp.completed=1').bind(userId,moduleId).first();if(Number(required?.n||0)>0&&Number(done?.n||0)>=Number(required.n))await awardXP(env,userId,'module',moduleId,Number(module.xp_reward||40),`Completed ${module.title}`);}
-  const requiredCourse=await env.DB.prepare('SELECT COUNT(*) n FROM lessons l JOIN modules m ON m.id=l.module_id WHERE m.course_id=? AND l.is_required=1').bind(courseId).first();const doneCourse=await env.DB.prepare('SELECT COUNT(*) n FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id JOIN modules m ON m.id=l.module_id WHERE lp.user_id=? AND m.course_id=? AND l.is_required=1 AND lp.completed=1').bind(userId,courseId).first();if(Number(requiredCourse?.n||0)>0&&Number(doneCourse?.n||0)>=Number(requiredCourse.n)){await env.DB.prepare("UPDATE enrollments SET status='completed',completed_at=COALESCE(completed_at,?) WHERE user_id=? AND course_id=?").bind(now(),userId,courseId).run();const course=await env.DB.prepare('SELECT * FROM courses WHERE id=?').bind(courseId).first();if(course){await awardXP(env,userId,'course',course.id,Number(course.xp_reward||200),`Completed ${course.title}`);if(course.certificate_enabled){const user=await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(userId).first();if(user)await issueCertificate(env,user,course);}}return true;}return false;
+  const module=await env.DB.prepare('SELECT * FROM modules WHERE id=? AND course_id=?').bind(moduleId,courseId).first();
+  if(module){
+    const required=await env.DB.prepare('SELECT COUNT(*) n FROM lessons WHERE module_id=? AND is_required=1').bind(moduleId).first();
+    const done=await env.DB.prepare('SELECT COUNT(*) n FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id WHERE lp.user_id=? AND l.module_id=? AND l.is_required=1 AND lp.completed=1').bind(userId,moduleId).first();
+    if(Number(required?.n||0)>0&&Number(done?.n||0)>=Number(required.n))await awardXP(env,userId,'module',moduleId,Number(module.xp_reward||40),'Completed '+module.title);
+  }
+  const requiredCourse=await env.DB.prepare('SELECT COUNT(*) n FROM lessons l JOIN modules m ON m.id=l.module_id WHERE m.course_id=? AND l.is_required=1').bind(courseId).first();
+  const doneCourse=await env.DB.prepare('SELECT COUNT(*) n FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id JOIN modules m ON m.id=l.module_id WHERE lp.user_id=? AND m.course_id=? AND l.is_required=1 AND lp.completed=1').bind(userId,courseId).first();
+  if(Number(requiredCourse?.n||0)>0&&Number(doneCourse?.n||0)>=Number(requiredCourse.n)){
+    const enrollment=await env.DB.prepare('SELECT status FROM enrollments WHERE user_id=? AND course_id=?').bind(userId,courseId).first();
+    const wasCompleted=enrollment?.status==='completed';
+    const completionTime=now();
+    await env.DB.prepare("UPDATE enrollments SET status='completed',completed_at=COALESCE(completed_at,?) WHERE user_id=? AND course_id=?").bind(completionTime,userId,courseId).run();
+    const course=await env.DB.prepare('SELECT * FROM courses WHERE id=?').bind(courseId).first();
+    let certificateId=null;
+    if(course){
+      await awardXP(env,userId,'course',course.id,Number(course.xp_reward||200),'Completed '+course.title);
+      const user=await env.DB.prepare('SELECT * FROM users WHERE id=?').bind(userId).first();
+      if(user&&course.certificate_enabled){
+        await issueCertificate(env,user,course);
+        const cert=await env.DB.prepare('SELECT id FROM certificates WHERE user_id=? AND course_id=?').bind(userId,courseId).first();
+        certificateId=cert?.id||null;
+      }
+      if(!wasCompleted&&user)sendCourseCompletedEmail(env,user,course,certificateId).catch(error=>console.error('completion_email_failed',error));
+    }
+    return true;
+  }
+  return false;
 }
+
 async function markLessonComplete(env,userId,lessonId,score=null){const lesson=await env.DB.prepare('SELECT l.*,m.course_id,m.id module_id,c.title course_title FROM lessons l JOIN modules m ON m.id=l.module_id JOIN courses c ON c.id=m.course_id WHERE l.id=?').bind(lessonId).first();if(!lesson)return null;const old=await env.DB.prepare('SELECT * FROM lesson_progress WHERE user_id=? AND lesson_id=?').bind(userId,lessonId).first();const doneAt=old?.completed_at||now();await env.DB.prepare(`INSERT INTO lesson_progress(id,user_id,lesson_id,completed,score,started_at,completed_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(user_id,lesson_id) DO UPDATE SET completed=excluded.completed,score=COALESCE(excluded.score,lesson_progress.score),completed_at=COALESCE(lesson_progress.completed_at,excluded.completed_at),updated_at=excluded.updated_at`).bind(old?.id||randomId(),userId,lessonId,1,score,old?.started_at||now(),doneAt,now()).run();if(!old?.completed)await awardXP(env,userId,'lesson',lessonId,Number(lesson.xp_reward||20),`Completed ${lesson.title}`);const complete=await refreshCompletions(env,userId,lesson.course_id,lesson.module_id);return {lesson,courseComplete:complete};}
 async function learnerLearning(env,request){const s=await requireUser(env,request);const rows=await env.DB.prepare(`SELECT c.*,e.status enrollment_status,e.enrolled_at,e.completed_at,(SELECT COUNT(*) FROM lessons l JOIN modules m ON m.id=l.module_id WHERE m.course_id=c.id AND l.is_required=1) required_count,(SELECT COUNT(*) FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id JOIN modules m ON m.id=l.module_id WHERE lp.user_id=? AND m.course_id=c.id AND l.is_required=1 AND lp.completed=1) completed_count FROM enrollments e JOIN courses c ON c.id=e.course_id WHERE e.user_id=? AND e.status IN ('active','completed') ORDER BY e.completed_at DESC,e.enrolled_at DESC`).bind(s.id,s.id).all();const achievements=await env.DB.prepare(`SELECT a.*,ua.awarded_at FROM user_achievements ua JOIN achievements a ON a.id=ua.achievement_id WHERE ua.user_id=? ORDER BY ua.awarded_at DESC`).bind(s.id).all();const certs=await env.DB.prepare(`SELECT ce.id,ce.certificate_number,ce.snapshot_course_title,ce.issued_at,c.slug FROM certificates ce JOIN courses c ON c.id=ce.course_id WHERE ce.user_id=? ORDER BY ce.issued_at DESC`).bind(s.id).all();return json({user:safeUser(s),courses:(rows.results||[]).map(c=>({...c,progress:Number(c.required_count||0)?Math.round(Number(c.completed_count||0)/Number(c.required_count||1)*100):0})),achievements:achievements.results||[],certificates:certs.results||[]});}
 async function lesson(env,request,id){const s=await requireUser(env,request);const row=await env.DB.prepare(`SELECT l.*,m.course_id,m.title module_title,c.title course_title,c.slug,c.status course_status,sp.title scorm_title FROM lessons l JOIN modules m ON m.id=l.module_id JOIN courses c ON c.id=m.course_id LEFT JOIN scorm_packages sp ON sp.id=l.scorm_package_id WHERE l.id=?`).bind(id).first();if(!row)return json({error:'Lesson not found'},404);if(!(await env.DB.prepare("SELECT id FROM enrollments WHERE user_id=? AND course_id=? AND status IN ('active','completed')").bind(s.id,row.course_id).first()))return json({error:'Enrollment required'},403);return json({lesson:row});}
