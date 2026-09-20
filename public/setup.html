@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IRIS LUMERA · Create Administrator</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 20% 10%,#27205a,transparent 35%),#08101e;color:#f6f7fb;font:15px/1.5 Inter,system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(560px,calc(100% - 32px));padding:34px;border:1px solid #2c3653;background:#111a2c;border-radius:28px;box-shadow:0 30px 100px #0008}
+.brand{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:.08em}.mark{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#9a7cff,#5cceff);color:white;font-size:22px}.eyebrow{margin:0 0 10px;letter-spacing:.2em;text-transform:uppercase;color:#aeb5cb;font-size:11px;font-weight:800}h1{font-size:32px;line-height:1.1;margin:24px 0 10px}p{color:#aeb5cb}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field{margin-top:14px}.field.full{grid-column:1/-1}label{display:block;font-size:12px;font-weight:700;margin-bottom:7px}input{width:100%;padding:13px 14px;border-radius:13px;border:1px solid #34405d;background:#0b1322;color:#fff;outline:none}input:focus{border-color:#8972ff}button{width:100%;margin-top:20px;padding:14px 18px;border:0;border-radius:14px;background:linear-gradient(135deg,#8f73ff,#6b63ff);color:#fff;font-weight:800;cursor:pointer}#m{min-height:24px;margin-top:14px}.ok{color:#75e0a2}.err{color:#ff9ca7}
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><span class="mark">I</span><div>IRIS LUMERA<div style="font-size:10px;color:#8d96ad;letter-spacing:.18em;margin-top:2px">LEARN. APPLY. BECOME.</div></div></div>
+  <p class="eyebrow" style="margin-top:28px">One-time setup</p>
+  <h1>Create the first administrator</h1>
+  <p>Use the setup secret stored in Cloudflare Worker Secrets. This page is only for the first administrator account.</p>
+  <form id="f">
+    <div class="grid">
+      <div class="field"><label>First name</label><input name="firstName" autocomplete="given-name" required></div>
+      <div class="field"><label>Last name</label><input name="lastName" autocomplete="family-name" required></div>
+      <div class="field full"><label>Administrator email</label><input name="email" type="email" autocomplete="email" required></div>
+      <div class="field full"><label>Setup secret</label><input name="setupSecret" type="password" required></div>
+      <div class="field full"><label>Administrator password</label><input name="password" type="password" minlength="10" autocomplete="new-password" required></div>
+    </div>
+    <button>Create administrator</button>
+  </form>
+  <p id="m"></p>
+</main>
+<script>
+const f=document.getElementById('f'),m=document.getElementById('m');
+f.addEventListener('submit',async e=>{
+  e.preventDefault();m.className='';m.textContent='Creating administrator…';
+  try{
+    const r=await fetch('/api/setup',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(f)))});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||'Setup failed');
+    m.className='ok';m.textContent='Administrator created. You can now sign in.';
+    f.reset();
+  }catch(err){m.className='err';m.textContent=err.message}
+});
+</script>
+</body>
+</html>
