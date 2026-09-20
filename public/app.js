@@ -133,9 +133,11 @@ async function deleteLessonAdmin(id){if(!confirm('Delete this lesson?'))return;t
 
 async function adminContent(c){
   const [courses,assets]=await Promise.all([api('/api/admin/courses'),api('/api/admin/assets')]);
-  const courseOptions=courses.courses.length
-    ? '<option value="">No course association</option>'+courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
-    : '<option value="">No courses available yet</option>';
+  const courseOptions='<option value="">No course association</option>'+(
+    courses.courses.length
+      ? courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
+      : '<option value="" disabled>No courses created yet</option>'
+  );
   const scormOptions=courses.courses.length
     ? '<option value="">Choose a course</option>'+courses.courses.map(co=>'<option value="'+esc(co.id)+'">'+esc(co.title)+' · '+esc(co.status)+'</option>').join('')
     : '<option value="">Create a course first</option>';
