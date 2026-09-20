@@ -33,6 +33,23 @@ async function login(env,request){
   if(firstLearnerLogin)sendWelcomeEmail(env,user).catch(error=>console.error('welcome_email_failed',error));
   return json({ok:true,user:safeUser(user),csrfToken:session.csrf,mustChangePassword:Boolean(user.must_change_password)},200,{'Set-Cookie':sessionCookie(session.token,session.expires)});
 }
+async function register(env,request){
+  const b=await bodyJson(request);
+  const email=String(b.email||'').trim().toLowerCase();
+  const firstName=String(b.firstName||'').trim();
+  const lastName=String(b.lastName||'').trim();
+  const employeeId=String(b.employeeId||'').trim()||null;
+  const department=String(b.department||'').trim();
+  const jobTitle=String(b.jobTitle||'').trim();
+  const password=String(b.password||'');
+  if(!email||!firstName||!lastName||password.length<10)return json({error:'First name, last name, email and a 10+ character password are required'},400);
+  if(await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first())return json({error:'An account with that email already exists'},409);
+  if(employeeId&&await env.DB.prepare('SELECT id FROM users WHERE employee_id=?').bind(employeeId).first())return json({error:'Employee ID already exists'},409);
+  const pass=await derivePassword(password),id=randomId(),t=now();
+  await env.DB.prepare(`INSERT INTO users(id,email,password_hash,password_salt,first_name,last_name,employee_id,department,job_title,role,status,must_change_password,xp,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'learner','active',0,0,?,?)`).bind(id,email,pass.hash,pass.salt,firstName,lastName,employeeId,department,jobTitle,t,t).run();
+  await audit(env,null,'learner.self_registered','user',id,{email,employeeId,department,jobTitle});
+  return json({ok:true,user:{id,email,firstName,lastName,employeeId,department,jobTitle,role:'learner',status:'active',mustChangePassword:false,xp:0}});
+}
 async function logout(env,request){const s=await currentSession(env,request);if(s)await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(s.id).run();return json({ok:true},200,{'Set-Cookie':clearSessionCookie()});}
 async function me(env,request){const s=await currentSession(env,request);if(!s)return json({authenticated:false});return json({authenticated:true,user:safeUser(s),csrfToken:s.csrf_token});}
 async function setup(env,request){
@@ -396,6 +413,7 @@ async function api(env,request){
   const parts=route(new URL(request.url).pathname);
   try{
     if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='login'&&request.method==='POST')return login(env,request);
+    if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='register'&&request.method==='POST')return register(env,request);
     if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='logout'&&request.method==='POST')return logout(env,request);
     if(parts[0]==='api'&&parts[1]==='auth'&&parts[2]==='me'&&request.method==='GET')return me(env,request);
     if(parts[0]==='api'&&parts[1]==='setup'&&request.method==='POST')return setup(env,request);
