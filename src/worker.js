@@ -197,7 +197,7 @@ async function assets(env,request){
     if(size>MAX_ASSET_BYTES)return json({error:'File exceeds the 500 MB content limit'},413);
     if(size>KV_VALUE_BYTES)return json({error:'Files above 25 MiB must use the chunked upload flow'},413);
     if(!request.body)return json({error:'Upload body is empty'},400);
-    const id=randomId(),key=\`uploads/\${new Date().toISOString().slice(0,10)}/\${id}-\${filename}\`,mime=mimeFor(filename,request.headers.get('Content-Type')||'');
+    const id=randomId(),key=`uploads/${new Date().toISOString().slice(0,10)}/${id}-${filename}`,mime=mimeFor(filename,request.headers.get('Content-Type')||'');
     await env.CONTENT.put(key,request.body,{metadata:{contentType:mime}});
     await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,courseId,key,filename,mime,size,kind,s.id,now()).run();
     await audit(env,s.id,'asset.uploaded','asset',id,{filename,kind,size,courseId,storage:'kv'});
@@ -220,7 +220,7 @@ async function assetUploadStart(env,request){
   const manifest={
     uploadId,createdBy:s.id,filename,courseId,kind,size,mime,totalChunks,createdAt:now()
   };
-  await env.CONTENT.put(\`uploads/meta/\${uploadId}\`,JSON.stringify(manifest),{metadata:{contentType:'application/json'}});
+  await env.CONTENT.put(`uploads/meta/${uploadId}`,JSON.stringify(manifest),{metadata:{contentType:'application/json'}});
   return json({ok:true,uploadId,totalChunks,chunkSize:UPLOAD_CHUNK_BYTES});
 }
 async function assetUploadChunk(env,request){
@@ -229,28 +229,28 @@ async function assetUploadChunk(env,request){
   const uploadId=String(url.searchParams.get('uploadId')||'').trim();
   const index=Number(url.searchParams.get('index'));
   if(!uploadId||!Number.isInteger(index))return json({error:'Upload ID and chunk index are required'},400);
-  const meta=await env.CONTENT.get(\`uploads/meta/\${uploadId}\`,{type:'json'});
+  const meta=await env.CONTENT.get(`uploads/meta/${uploadId}`,{type:'json'});
   if(!meta||meta.createdBy!==s.id)return json({error:'Upload not found'},404);
   if(index<0||index>=meta.totalChunks)return json({error:'Invalid chunk index'},400);
   const size=Number(request.headers.get('Content-Length')||0);
   if(size<=0||size>UPLOAD_CHUNK_BYTES)return json({error:'Invalid chunk size'},413);
   if(!request.body)return json({error:'Chunk body is empty'},400);
-  await env.CONTENT.put(\`uploads/chunks/\${uploadId}/\${index}\`,request.body,{metadata:{contentType:meta.mime}});
+  await env.CONTENT.put(`uploads/chunks/${uploadId}/${index}`,request.body,{metadata:{contentType:meta.mime}});
   return json({ok:true,index});
 }
 async function assetUploadFinalize(env,request){
   const s=await authCsrf(env,request,'admin');
   const b=await bodyJson(request);
   const uploadId=String(b.uploadId||'').trim();
-  const meta=await env.CONTENT.get(\`uploads/meta/\${uploadId}\`,{type:'json'});
+  const meta=await env.CONTENT.get(`uploads/meta/${uploadId}`,{type:'json'});
   if(!meta||meta.createdBy!==s.id)return json({error:'Upload not found'},404);
   for(let i=0;i<meta.totalChunks;i++){
-    const exists=await env.CONTENT.get(\`uploads/chunks/\${uploadId}/\${i}\`,{type:'arrayBuffer'});
-    if(!exists?.value)return json({error:\`Upload is incomplete. Missing chunk \${i+1} of \${meta.totalChunks}.\`},409);
+    const exists=await env.CONTENT.get(`uploads/chunks/${uploadId}/${i}`,{type:'arrayBuffer'});
+    if(!exists?.value)return json({error:`Upload is incomplete. Missing chunk ${i+1} of ${meta.totalChunks}.`},409);
   }
-  const id=randomId(),key=\`uploads/chunked/\${uploadId}\`;
+  const id=randomId(),key=`uploads/chunked/${uploadId}`;
   await env.DB.prepare('INSERT INTO assets(id,course_id,storage_key,filename,mime_type,size_bytes,kind,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,meta.courseId,key,meta.filename,meta.mime,meta.size,meta.kind,s.id,now()).run();
-  await env.CONTENT.delete(\`uploads/meta/\${uploadId}\`);
+  await env.CONTENT.delete(`uploads/meta/${uploadId}`);
   await audit(env,s.id,'asset.uploaded','asset',id,{filename:meta.filename,kind:meta.kind,size:meta.size,courseId:meta.courseId,storage:'kv-chunked',chunks:meta.totalChunks});
   return json({ok:true,asset:{id,courseId:meta.courseId,filename:meta.filename,mimeType:meta.mime,sizeBytes:meta.size,kind:meta.kind}},201);
 }
@@ -261,8 +261,8 @@ async function deleteAsset(env,request,id){
   if(String(asset.storage_key||'').startsWith('uploads/chunked/')){
     const uploadId=String(asset.storage_key).replace('uploads/chunked/','');
     const total=Math.ceil(Number(asset.size_bytes||0)/UPLOAD_CHUNK_BYTES);
-    for(let i=0;i<total;i++)await env.CONTENT.delete(\`uploads/chunks/\${uploadId}/\${i}\`);
-    await env.CONTENT.delete(\`uploads/meta/\${uploadId}\`);
+    for(let i=0;i<total;i++)await env.CONTENT.delete(`uploads/chunks/${uploadId}/${i}`);
+    await env.CONTENT.delete(`uploads/meta/${uploadId}`);
   }else{
     await env.CONTENT.delete(asset.storage_key);
   }
@@ -349,19 +349,19 @@ async function serveAsset(env,request,id){
   let start=0,end=total-1,status=200;
   if(range){
     const m=/^bytes=(\\d*)-(\\d*)$/.exec(range.trim());
-    if(!m)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});
+    if(!m)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':`bytes */${total}`}});
     if(m[1]===''&&m[2]===''){
-      return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});
+      return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':`bytes */${total}`}});
     }
     if(m[1]===''){
-      const suffix=Math.max(0,Number(m[2]||0));if(!suffix)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});start=Math.max(0,total-suffix);
+      const suffix=Math.max(0,Number(m[2]||0));if(!suffix)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':`bytes */${total}`}});start=Math.max(0,total-suffix);
     }else{
       start=Number(m[1]);
       end=m[2]?Number(m[2]):total-1;
     }
-    if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||start>=total||end<start)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':\`bytes */\${total}\`}});
+    if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||start>=total||end<start)return new Response('Range Not Satisfiable',{status:416,headers:{'Content-Range':`bytes */${total}`}});
     end=Math.min(end,total-1);status=206;
-    headersBase.set('Content-Range',\`bytes \${start}-\${end}/\${total}\`);
+    headersBase.set('Content-Range',`bytes ${start}-${end}/${total}`);
   }
   headersBase.set('Content-Length',String(end-start+1));
   const prefix=String(asset.storage_key).replace(/^uploads\/chunked\//,'');
@@ -372,7 +372,7 @@ async function serveAsset(env,request,id){
       (async()=>{
         try{
           for(let index=first;index<=last;index++){
-            const obj=await env.CONTENT.getWithMetadata(\`uploads/chunks/\${prefix}/\${index}\`,{type:'arrayBuffer'});
+            const obj=await env.CONTENT.getWithMetadata(`uploads/chunks/${prefix}/${index}`,{type:'arrayBuffer'});
             if(!obj?.value)throw new Error('Content chunk not found');
             const bytes=new Uint8Array(obj.value);
             const chunkStart=index*UPLOAD_CHUNK_BYTES;
