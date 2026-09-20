@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "iris-lumera-db",
-      "database_id": "REPLACE_AFTER_WRANGLER_D1_CREATE",
+      "database_id": "3de90461-7851-4733-a6a6-198bd9d25464",
       "migrations_dir": "migrations"
     }
   ],
