@@ -188,7 +188,7 @@ async function newCourse(){
         const up=await uploadAssetFile(cover,r.id,'course-cover');
         await api('/api/admin/course/'+encodeURIComponent(r.id),{method:'POST',body:JSON.stringify({...b,coverAssetId:up.asset.id})});
       }
-      closeModal();toast('Course created.');await adminCourses($('#admin-content'));
+      closeModal();toast('Course created.');await adminCourses(document.getElementById('admin-content'));
     }catch(err){toast(err.message)}
   });
 }
@@ -204,7 +204,7 @@ async function editCourse(id){
         const up=await uploadAssetFile(cover,id,'course-cover');
         await api('/api/admin/course/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({...b,coverAssetId:up.asset.id})});
       }
-      closeModal();toast('Course updated.');await adminCourses($('#admin-content'));
+      closeModal();toast('Course updated.');await adminCourses(document.getElementById('admin-content'));
     }catch(err){toast(err.message)}
   });
 }
