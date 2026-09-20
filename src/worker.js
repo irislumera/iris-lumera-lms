@@ -386,7 +386,7 @@ async function scormUpload(env,request){
     await env.DB.prepare('INSERT INTO lessons(id,module_id,title,type,body,scorm_package_id,duration_minutes,position,is_required,xp_reward,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(lessonId,moduleId,inspected.title,'scorm','',pkg.id,15,position,1,50,now(),now()).run();
   }
   await audit(env,s.id,'scorm.imported','scorm_package',pkg.id,{courseId,moduleId,lessonId,version:inspected.version});
-  return json({ok:true,courseId,package:{id:pkg.id,assetId:pkg.assetId,title:pkg.title,version:pkg.version,launchPath:pkg.launchPath,courseId,moduleId,lessonId}},201);
+  return json({ok:true,courseId,package:{id:pkg.id,assetId:pkg.assetId,title:pkg.title,version:pkg.version,launchPath:pkg.launchPath,fileCount:Object.keys(pkg.files||{}).length,courseId,moduleId,lessonId}},201);
 }
 
 async function scormPackages(env,request){await authCsrf(env,request,'admin');const rows=await env.DB.prepare(`SELECT p.*,c.title course_title,(SELECT COUNT(*) FROM lessons l WHERE l.scorm_package_id=p.id) lessons FROM scorm_packages p LEFT JOIN courses c ON c.id=p.course_id ORDER BY p.created_at DESC`).all();return json({packages:rows.results||[]});}
